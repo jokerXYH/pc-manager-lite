@@ -11,6 +11,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Management;
+using System.Security.Cryptography;
+using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 namespace PcManagerLite
@@ -3039,6 +3041,441 @@ namespace PcManagerLite
         }
     }
 
+    internal sealed class ManagerSettings
+    {
+        public string Theme = "system";
+        public bool CheckUpdatesOnStart = true;
+
+        public static ManagerSettings Load()
+        {
+            ManagerSettings settings = new ManagerSettings();
+            string path = Path.Combine(AppPaths.DataDirectory, "settings.ini");
+            try
+            {
+                if (File.Exists(path))
+                {
+                    foreach (string raw in File.ReadAllLines(path, Encoding.UTF8))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+                        int equals = line.IndexOf('=');
+                        if (equals <= 0)
+                        {
+                            continue;
+                        }
+                        string key = line.Substring(0, equals).Trim();
+                        string value = line.Substring(equals + 1).Trim();
+                        if (key.Equals("Theme", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (value.Equals("light", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("dark", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("system", StringComparison.OrdinalIgnoreCase))
+                            {
+                                settings.Theme = value.ToLowerInvariant();
+                            }
+                        }
+                        else if (key.Equals("CheckUpdatesOnStart", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bool parsed;
+                            if (Boolean.TryParse(value, out parsed))
+                            {
+                                settings.CheckUpdatesOnStart = parsed;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("读取设置失败: " + ex.Message);
+            }
+            return settings;
+        }
+
+        public void Save()
+        {
+            try
+            {
+                if (!Directory.Exists(AppPaths.DataDirectory))
+                {
+                    Directory.CreateDirectory(AppPaths.DataDirectory);
+                }
+                File.WriteAllLines(
+                    Path.Combine(AppPaths.DataDirectory, "settings.ini"),
+                    new string[]
+                    {
+                        "Theme=" + Theme,
+                        "CheckUpdatesOnStart=" + CheckUpdatesOnStart.ToString()
+                    },
+                    Encoding.UTF8);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("保存设置失败: " + ex.Message);
+            }
+        }
+    }
+
+    internal static class AppStartupService
+    {
+        private const string RunKey =
+            @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string ValueName = "PcManagerLite";
+
+        public static bool IsEnabled()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, false))
+                {
+                    if (key == null)
+                    {
+                        return false;
+                    }
+                    string value = Convert.ToString(key.GetValue(ValueName, String.Empty));
+                    string exe = ShortcutManager.ApplicationExecutablePath();
+                    return value.IndexOf(exe, StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void SetEnabled(bool enabled)
+        {
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
+            {
+                if (key == null)
+                {
+                    throw new UnauthorizedAccessException("无法打开开机启动注册表。");
+                }
+                if (enabled)
+                {
+                    string executable = ShortcutManager.ApplicationExecutablePath();
+                    key.SetValue(
+                        ValueName,
+                        "\"" + executable + "\" --minimized",
+                        RegistryValueKind.String);
+                }
+                else
+                {
+                    key.DeleteValue(ValueName, false);
+                }
+            }
+        }
+    }
+
+    internal sealed class UpdateInfo
+    {
+        public string Version;
+        public long Size;
+        public string Sha256;
+        public string DownloadUrl;
+        public readonly List<string> Notes = new List<string>();
+    }
+
+    internal sealed class UpdateCheckResult
+    {
+        public bool Available;
+        public bool UpToDate;
+        public string CurrentVersion;
+        public string LatestVersion;
+        public string Error;
+        public UpdateInfo Info;
+    }
+
+    internal static class UpdateService
+    {
+        public const string ManifestUrl =
+            "https://jokerx.top/downloads/pc-manager-lite/version.js";
+        public const string DefaultDownloadUrl =
+            "https://jokerx.top/downloads/pc-manager-lite/pc-manager-lite.exe";
+
+        public static string CurrentVersion()
+        {
+            Version version = typeof(UpdateService).Assembly.GetName().Version;
+            return version == null
+                ? "0.0.0"
+                : version.Major + "." + version.Minor + "." + Math.Max(0, version.Build);
+        }
+
+        public static UpdateCheckResult Check()
+        {
+            UpdateCheckResult result = new UpdateCheckResult();
+            result.CurrentVersion = CurrentVersion();
+            try
+            {
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                using (WebClient client = new WebClient())
+                {
+                    client.Encoding = Encoding.UTF8;
+                    client.Headers[HttpRequestHeader.UserAgent] =
+                        "PcManagerLite/" + result.CurrentVersion;
+                    client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+                    string url = ManifestUrl + "?t=" + DateTime.UtcNow.Ticks;
+                    string text = client.DownloadString(url);
+                    Match match = Regex.Match(
+                        text,
+                        @"=\s*(\{[\s\S]*\})\s*;?\s*$");
+                    if (!match.Success)
+                    {
+                        throw new InvalidDataException("服务器更新清单格式不正确。");
+                    }
+                    JavaScriptSerializer serializer = new JavaScriptSerializer();
+                    Dictionary<string, object> data =
+                        serializer.DeserializeObject(match.Groups[1].Value)
+                        as Dictionary<string, object>;
+                    if (data == null)
+                    {
+                        throw new InvalidDataException("服务器更新清单为空。");
+                    }
+
+                    UpdateInfo info = new UpdateInfo();
+                    info.Version = Convert.ToString(GetValue(data, "versionName", ""));
+                    info.Size = Convert.ToInt64(GetValue(data, "size", 0L));
+                    info.Sha256 = Convert.ToString(GetValue(data, "sha256", ""));
+                    info.DownloadUrl = Convert.ToString(
+                        GetValue(data, "downloadUrl", DefaultDownloadUrl));
+                    object notes = GetValue(data, "releaseNotes", null);
+                    object[] noteArray = notes as object[];
+                    if (noteArray != null)
+                    {
+                        foreach (object note in noteArray)
+                        {
+                            string line = Convert.ToString(note);
+                            if (!String.IsNullOrWhiteSpace(line))
+                            {
+                                info.Notes.Add(line);
+                            }
+                        }
+                    }
+
+                    Uri downloadUri;
+                    if (!Uri.TryCreate(info.DownloadUrl, UriKind.Absolute, out downloadUri) ||
+                        !downloadUri.Host.Equals(
+                            "jokerx.top",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException(
+                            "更新下载地址不是 jokerx.top，已拒绝。");
+                    }
+                    if (String.IsNullOrWhiteSpace(info.Version) ||
+                        String.IsNullOrWhiteSpace(info.Sha256))
+                    {
+                        throw new InvalidDataException("更新清单缺少版本或哈希。");
+                    }
+
+                    result.Info = info;
+                    result.LatestVersion = info.Version;
+                    Version current;
+                    Version latest;
+                    if (!Version.TryParse(result.CurrentVersion, out current) ||
+                        !Version.TryParse(NormalizeVersion(info.Version), out latest))
+                    {
+                        throw new InvalidDataException("无法比较版本号。");
+                    }
+                    result.UpToDate = latest <= current;
+                    result.Available = latest > current;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Error = ex.Message;
+                FileLogger.Write("检查更新失败: " + ex);
+            }
+            return result;
+        }
+
+        public static bool DownloadVerified(
+            UpdateInfo info,
+            Action<string> progress,
+            out string downloadedPath,
+            out string error)
+        {
+            downloadedPath = String.Empty;
+            error = String.Empty;
+            try
+            {
+                string directory = Path.Combine(
+                    Path.GetTempPath(),
+                    "PcManagerLiteUpdate");
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                string path = Path.Combine(
+                    directory,
+                    "pc-manager-lite-" + NormalizeVersion(info.Version) + ".exe");
+                if (progress != null)
+                {
+                    progress("正在从 jokerx.top 下载更新…");
+                }
+                using (WebClient client = new WebClient())
+                {
+                    client.Headers[HttpRequestHeader.UserAgent] =
+                        "PcManagerLite/" + CurrentVersion();
+                    client.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+                    client.DownloadFile(info.DownloadUrl, path);
+                }
+                downloadedPath = path;
+                if (progress != null)
+                {
+                    progress("正在校验更新文件…");
+                }
+                FileInfo file = new FileInfo(path);
+                if (info.Size > 0 && file.Length != info.Size)
+                {
+                    throw new InvalidDataException(
+                        "下载文件大小与发布清单不一致。");
+                }
+                string actualHash;
+                using (SHA256 sha = SHA256.Create())
+                using (FileStream stream = File.OpenRead(path))
+                {
+                    actualHash = BitConverter.ToString(sha.ComputeHash(stream))
+                        .Replace("-", "")
+                        .ToLowerInvariant();
+                }
+                if (!actualHash.Equals(
+                    info.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException(
+                        "更新文件 SHA-256 校验失败。");
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                try
+                {
+                    if (!String.IsNullOrWhiteSpace(downloadedPath))
+                    {
+                        File.Delete(downloadedPath);
+                    }
+                }
+                catch
+                {
+                }
+                FileLogger.Write("下载更新失败: " + ex);
+                return false;
+            }
+        }
+
+        public static bool StartUpdaterAndExit(string downloadedPath)
+        {
+            try
+            {
+                if (!Directory.Exists(AppPaths.DataDirectory))
+                {
+                    Directory.CreateDirectory(AppPaths.DataDirectory);
+                }
+                string executable = ShortcutManager.ApplicationExecutablePath();
+                int processId = Process.GetCurrentProcess().Id;
+                string script = String.Format(
+                    "while (Get-Process -Id {0} -ErrorAction SilentlyContinue) {{ " +
+                    "Start-Sleep -Milliseconds 250 }}; Start-Sleep -Milliseconds 400; " +
+                    "Copy-Item -LiteralPath '{2}' -Destination '{4}' -Force -ErrorAction SilentlyContinue; " +
+                    "try {{ Copy-Item -LiteralPath '{1}' -Destination '{2}' -Force }} " +
+                    "catch {{ Add-Content -LiteralPath '{3}' -Value $_.Exception.ToString() }}; " +
+                    "Start-Process -FilePath '{2}'; " +
+                    "if (Test-Path -LiteralPath '{1}') {{ Remove-Item -LiteralPath '{1}' -Force }}",
+                    processId,
+                    EscapePowerShell(downloadedPath),
+                    EscapePowerShell(executable),
+                    EscapePowerShell(Path.Combine(AppPaths.DataDirectory, "updater.log")),
+                    EscapePowerShell(executable + ".bak"));
+                string encoded = Convert.ToBase64String(
+                    Encoding.Unicode.GetBytes(script));
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    @"System32\WindowsPowerShell\v1.0\powershell.exe");
+                startInfo.Arguments =
+                    "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass " +
+                    "-EncodedCommand " + encoded;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                Process.Start(startInfo);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("启动更新程序失败: " + ex);
+                return false;
+            }
+        }
+
+        private static object GetValue(
+            Dictionary<string, object> data,
+            string key,
+            object fallback)
+        {
+            object value;
+            return data.TryGetValue(key, out value) ? value : fallback;
+        }
+
+        private static string NormalizeVersion(string version)
+        {
+            string value = (version ?? String.Empty).Trim();
+            if (value.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(1);
+            }
+            int dash = value.IndexOf('-');
+            return dash >= 0 ? value.Substring(0, dash) : value;
+        }
+
+        private static string EscapePowerShell(string value)
+        {
+            return (value ?? String.Empty).Replace("'", "''");
+        }
+    }
+
+    internal static class AppLifecycleService
+    {
+        public static bool RelaunchAfterExit()
+        {
+            try
+            {
+                string executable = ShortcutManager.ApplicationExecutablePath();
+                int processId = Process.GetCurrentProcess().Id;
+                string script = String.Format(
+                    "while (Get-Process -Id {0} -ErrorAction SilentlyContinue) {{ " +
+                    "Start-Sleep -Milliseconds 250 }}; Start-Sleep -Milliseconds 300; " +
+                    "Start-Process -FilePath '{1}'",
+                    processId,
+                    executable.Replace("'", "''"));
+                string encoded = Convert.ToBase64String(
+                    Encoding.Unicode.GetBytes(script));
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    @"System32\WindowsPowerShell\v1.0\powershell.exe");
+                startInfo.Arguments =
+                    "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass " +
+                    "-EncodedCommand " + encoded;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                Process.Start(startInfo);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("重启管家失败: " + ex);
+                return false;
+            }
+        }
+    }
+
     internal enum StartupSourceType
     {
         Registry,
@@ -3548,6 +3985,16 @@ namespace PcManagerLite
         {
             string text = ((item.Name ?? String.Empty) + " " +
                 (item.Command ?? String.Empty)).ToLowerInvariant();
+            string currentExecutable =
+                ShortcutManager.ApplicationExecutablePath().ToLowerInvariant();
+            if (!String.IsNullOrWhiteSpace(currentExecutable) &&
+                text.Contains(currentExecutable))
+            {
+                item.CanDisable = false;
+                item.RiskLabel = "本工具";
+                item.Note = "请在设置页管理“随 Windows 启动”";
+                return;
+            }
             bool protectedItem = false;
             foreach (string term in ProtectedTerms)
             {

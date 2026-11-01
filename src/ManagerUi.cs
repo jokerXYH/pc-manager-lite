@@ -4,16 +4,18 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("电脑管家 Lite")]
 [assembly: System.Reflection.AssemblyDescription("轻量的清理、游戏加速与网络修复工具")]
 [assembly: System.Reflection.AssemblyProduct("电脑管家 Lite")]
 [assembly: System.Reflection.AssemblyCompany("Local")]
-[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.3.0.0")]
 
 namespace PcManagerLite
 {
@@ -24,11 +26,25 @@ namespace PcManagerLite
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            ManagerSettings startupSettings = ManagerSettings.Load();
+            Palette.ApplyMode(startupSettings.Theme);
+            string forcedTheme = GetArgumentValue(args, "--theme");
+            if (!String.IsNullOrWhiteSpace(forcedTheme))
+            {
+                Palette.ApplyMode(forcedTheme);
+            }
 
             if (HasArgument(args, "--self-test"))
             {
                 string report = GetArgumentValue(args, "--report");
                 Environment.ExitCode = SelfTest.Run(report) ? 0 : 1;
+                return;
+            }
+
+            if (HasArgument(args, "--update-self-test"))
+            {
+                Environment.ExitCode = UpdateSelfTest(
+                    GetArgumentValue(args, "--report"));
                 return;
             }
 
@@ -69,7 +85,9 @@ namespace PcManagerLite
                     return;
                 }
 
-                Application.Run(new MainForm());
+                Application.Run(new MainForm(
+                    startupSettings,
+                    HasArgument(args, "--minimized")));
             }
         }
 
@@ -175,28 +193,164 @@ namespace PcManagerLite
                 return 1;
             }
         }
+
+        private static int UpdateSelfTest(string reportPath)
+        {
+            try
+            {
+                StringBuilder report = new StringBuilder();
+                UpdateCheckResult check = UpdateService.Check();
+                report.AppendLine("Current=" + check.CurrentVersion);
+                report.AppendLine("Latest=" + check.LatestVersion);
+                report.AppendLine("Available=" + check.Available);
+                report.AppendLine("UpToDate=" + check.UpToDate);
+                report.AppendLine("Error=" + (check.Error ?? "none"));
+                bool ok = String.IsNullOrWhiteSpace(check.Error) && check.Info != null;
+                if (ok)
+                {
+                    string downloaded;
+                    string error;
+                    ok = UpdateService.DownloadVerified(
+                        check.Info,
+                        null,
+                        out downloaded,
+                        out error);
+                    report.AppendLine("DownloadVerified=" + ok);
+                    report.AppendLine("DownloadError=" + (error ?? "none"));
+                    report.AppendLine("DownloadedPath=" + downloaded);
+                    if (ok && File.Exists(downloaded))
+                    {
+                        string downloadedHash;
+                        using (SHA256 sha = SHA256.Create())
+                        using (FileStream stream = File.OpenRead(downloaded))
+                        {
+                            downloadedHash = BitConverter.ToString(sha.ComputeHash(stream))
+                                .Replace("-", "")
+                                .ToLowerInvariant();
+                        }
+                        report.AppendLine("DownloadedSHA256=" + downloadedHash);
+                        File.Delete(downloaded);
+                    }
+                }
+                if (String.IsNullOrWhiteSpace(reportPath))
+                {
+                    reportPath = Path.Combine(
+                        Path.GetTempPath(),
+                        "PcManagerLite-update-test.txt");
+                }
+                string directory = Path.GetDirectoryName(reportPath);
+                if (!String.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                File.WriteAllText(reportPath, report.ToString(), Encoding.UTF8);
+                return ok ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                if (!String.IsNullOrWhiteSpace(reportPath))
+                {
+                    File.WriteAllText(reportPath, ex.ToString(), Encoding.UTF8);
+                }
+                return 1;
+            }
+        }
     }
 
     internal static class Palette
     {
-        public static readonly Color Canvas = Color.FromArgb(244, 248, 252);
-        public static readonly Color Card = Color.White;
-        public static readonly Color Sidebar = Color.FromArgb(12, 39, 68);
-        public static readonly Color SidebarHover = Color.FromArgb(24, 61, 98);
-        public static readonly Color SidebarMuted = Color.FromArgb(159, 188, 218);
-        public static readonly Color Accent = Color.FromArgb(21, 132, 255);
-        public static readonly Color AccentDark = Color.FromArgb(10, 105, 226);
-        public static readonly Color AccentHover = Color.FromArgb(8, 115, 232);
-        public static readonly Color Aqua = Color.FromArgb(27, 198, 183);
-        public static readonly Color Ink = Color.FromArgb(25, 37, 54);
-        public static readonly Color Muted = Color.FromArgb(111, 126, 145);
-        public static readonly Color Border = Color.FromArgb(221, 231, 242);
-        public static readonly Color SoftBlue = Color.FromArgb(235, 244, 255);
-        public static readonly Color Warning = Color.FromArgb(245, 166, 35);
-        public static readonly Color Danger = Color.FromArgb(229, 85, 98);
-        public static readonly Color Success = Color.FromArgb(29, 174, 120);
-        public static readonly Color HeroStart = Color.FromArgb(18, 102, 235);
-        public static readonly Color HeroEnd = Color.FromArgb(30, 190, 181);
+        private static bool _dark;
+        private static string _mode = "system";
+
+        public static bool IsDark
+        {
+            get { return _dark; }
+        }
+
+        public static string Mode
+        {
+            get { return _mode; }
+        }
+
+        public static Color Canvas
+        {
+            get { return _dark ? Color.FromArgb(24, 32, 41) : Color.FromArgb(243, 246, 249); }
+        }
+
+        public static Color Card
+        {
+            get { return _dark ? Color.FromArgb(33, 42, 51) : Color.White; }
+        }
+
+        public static Color Sidebar
+        {
+            get { return _dark ? Color.FromArgb(17, 24, 32) : Color.FromArgb(14, 36, 58); }
+        }
+
+        public static Color SidebarHover
+        {
+            get { return _dark ? Color.FromArgb(38, 52, 65) : Color.FromArgb(25, 56, 86); }
+        }
+
+        public static Color SidebarMuted
+        {
+            get { return _dark ? Color.FromArgb(154, 170, 184) : Color.FromArgb(169, 192, 214); }
+        }
+
+        public static Color Accent
+        {
+            get { return _dark ? Color.FromArgb(75, 152, 232) : Color.FromArgb(20, 119, 232); }
+        }
+
+        public static Color AccentDark
+        {
+            get { return _dark ? Color.FromArgb(131, 192, 255) : Color.FromArgb(10, 92, 185); }
+        }
+
+        public static Color AccentHover
+        {
+            get { return _dark ? Color.FromArgb(62, 132, 208) : Color.FromArgb(10, 104, 207); }
+        }
+
+        public static Color Aqua
+        {
+            get { return _dark ? Color.FromArgb(69, 191, 184) : Color.FromArgb(24, 143, 134); }
+        }
+
+        public static Color Ink
+        {
+            get { return _dark ? Color.FromArgb(238, 243, 247) : Color.FromArgb(25, 34, 45); }
+        }
+
+        public static Color Muted
+        {
+            get { return _dark ? Color.FromArgb(153, 168, 182) : Color.FromArgb(104, 118, 133); }
+        }
+
+        public static Color Border
+        {
+            get { return _dark ? Color.FromArgb(52, 65, 77) : Color.FromArgb(218, 226, 234); }
+        }
+
+        public static Color SoftBlue
+        {
+            get { return _dark ? Color.FromArgb(36, 53, 69) : Color.FromArgb(235, 244, 253); }
+        }
+
+        public static Color Warning
+        {
+            get { return _dark ? Color.FromArgb(231, 172, 74) : Color.FromArgb(205, 127, 17); }
+        }
+
+        public static Color Danger
+        {
+            get { return _dark ? Color.FromArgb(240, 122, 130) : Color.FromArgb(210, 66, 79); }
+        }
+
+        public static Color Success
+        {
+            get { return _dark ? Color.FromArgb(70, 200, 146) : Color.FromArgb(20, 139, 91); }
+        }
 
         public static readonly Font Body = new Font("Microsoft YaHei UI", 9F);
         public static readonly Font BodyBold = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
@@ -205,6 +359,42 @@ namespace PcManagerLite
         public static readonly Font SectionTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
         public static readonly Font Metric = new Font("Microsoft YaHei UI", 17F, FontStyle.Bold);
         public static readonly Font SidebarBrand = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold);
+
+        public static void ApplyMode(string mode)
+        {
+            _mode = String.IsNullOrWhiteSpace(mode)
+                ? "system"
+                : mode.Trim().ToLowerInvariant();
+            if (_mode == "dark")
+            {
+                _dark = true;
+            }
+            else if (_mode == "light")
+            {
+                _dark = false;
+            }
+            else
+            {
+                _dark = IsSystemDark();
+                _mode = "system";
+            }
+        }
+
+        private static bool IsSystemDark()
+        {
+            try
+            {
+                object value = Registry.GetValue(
+                    @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                    "AppsUseLightTheme",
+                    1);
+                return Convert.ToInt32(value) == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
     }
 
     internal enum ManagerView
@@ -214,7 +404,8 @@ namespace PcManagerLite
         Game,
         Network,
         Startup,
-        Recovery
+        Recovery,
+        Settings
     }
 
     internal enum NavIconKind
@@ -224,7 +415,8 @@ namespace PcManagerLite
         Game,
         Network,
         Startup,
-        Recovery
+        Recovery,
+        Settings
     }
 
     internal sealed class MainForm : Form
@@ -240,11 +432,19 @@ namespace PcManagerLite
         private readonly NetworkPage _networkPage;
         private readonly StartupPage _startupPage;
         private readonly RecoveryPage _recoveryPage;
+        private readonly SettingsPage _settingsPage;
+        private readonly ManagerSettings _settings;
         private bool _quickChecking;
         private ManagerView _activeView = ManagerView.Dashboard;
 
         public MainForm()
+            : this(ManagerSettings.Load(), false)
         {
+        }
+
+        public MainForm(ManagerSettings settings, bool startMinimized)
+        {
+            _settings = settings ?? ManagerSettings.Load();
             Text = "电脑管家 Lite";
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(1200, 790);
@@ -269,6 +469,7 @@ namespace PcManagerLite
             _networkPage = new NetworkPage();
             _startupPage = new StartupPage();
             _recoveryPage = new RecoveryPage(this);
+            _settingsPage = new SettingsPage(this, _settings);
 
             _pages[ManagerView.Dashboard] = _dashboardPage;
             _pages[ManagerView.Cleanup] = _cleanupPage;
@@ -276,6 +477,7 @@ namespace PcManagerLite
             _pages[ManagerView.Network] = _networkPage;
             _pages[ManagerView.Startup] = _startupPage;
             _pages[ManagerView.Recovery] = _recoveryPage;
+            _pages[ManagerView.Settings] = _settingsPage;
 
             foreach (Control page in _pages.Values)
             {
@@ -291,6 +493,14 @@ namespace PcManagerLite
             {
                 Navigate(ManagerView.Dashboard);
                 UpdateKnownSystemState();
+                if (startMinimized)
+                {
+                    WindowState = FormWindowState.Minimized;
+                }
+                if (_settings.CheckUpdatesOnStart)
+                {
+                    _settingsPage.AutoCheck();
+                }
             };
             Resize += delegate
             {
@@ -328,6 +538,10 @@ namespace PcManagerLite
             {
                 _recoveryPage.RefreshState();
             }
+            if (view == ManagerView.Settings)
+            {
+                _settingsPage.RefreshState();
+            }
         }
 
         public void NavigateForTest(string page)
@@ -356,6 +570,10 @@ namespace PcManagerLite
             else if (page.Equals("recovery", StringComparison.OrdinalIgnoreCase))
             {
                 Navigate(ManagerView.Recovery);
+            }
+            else if (page.Equals("settings", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigate(ManagerView.Settings);
             }
             else
             {
@@ -411,7 +629,7 @@ namespace PcManagerLite
             brand.Controls.Add(name);
 
             Label version = new Label();
-            version.Text = "轻量版 2.2";
+            version.Text = "轻量版 2.3";
             version.Font = Palette.Small;
             version.ForeColor = Palette.SidebarMuted;
             version.AutoSize = true;
@@ -421,7 +639,7 @@ namespace PcManagerLite
 
             Panel nav = new Panel();
             nav.Dock = DockStyle.Top;
-            nav.Height = 402;
+            nav.Height = 354;
             nav.Padding = new Padding(10, 6, 10, 0);
 
             AddSidebarButton(nav, ManagerView.Dashboard, "首页体检", NavIconKind.Home);
@@ -430,6 +648,7 @@ namespace PcManagerLite
             AddSidebarButton(nav, ManagerView.Network, "网络修复", NavIconKind.Network);
             AddSidebarButton(nav, ManagerView.Startup, "启动项管理", NavIconKind.Startup);
             AddSidebarButton(nav, ManagerView.Recovery, "恢复中心", NavIconKind.Recovery);
+            AddSidebarButton(nav, ManagerView.Settings, "设置", NavIconKind.Settings);
             sidebar.Controls.Add(nav);
             nav.BringToFront();
 
@@ -489,7 +708,7 @@ namespace PcManagerLite
         {
             SidebarButton button = new SidebarButton();
             button.Dock = DockStyle.Top;
-            button.Height = 54;
+            button.Height = 48;
             button.Text = text;
             button.IconKind = icon;
             button.Margin = new Padding(0, 0, 0, 4);
@@ -753,12 +972,21 @@ namespace PcManagerLite
                     graphics.DrawLine(pen, box.Left + 9, box.Top + 9, box.Left + 9, box.Top + 13);
                     graphics.DrawLine(pen, box.Left + 9, box.Top + 13, box.Left + 13, box.Top + 13);
                 }
-                else
+                else if (kind == NavIconKind.Recovery)
                 {
                     graphics.DrawArc(pen, box.Left + 3, box.Top + 1, box.Width - 6, box.Height - 2, 205, 310);
                     graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Left + 9, box.Top + 9);
                     graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Right - 4, box.Top + 3);
                     graphics.DrawArc(pen, box.Left + 6, box.Top + 7, 7, 7, 20, 270);
+                }
+                else
+                {
+                    graphics.DrawEllipse(pen, box.Left + 4, box.Top + 4, box.Width - 8, box.Height - 8);
+                    graphics.DrawEllipse(pen, box.Left + 7, box.Top + 7, box.Width - 14, box.Height - 14);
+                    graphics.DrawLine(pen, box.Left + 9, box.Top, box.Left + 9, box.Top + 4);
+                    graphics.DrawLine(pen, box.Right - 9, box.Top, box.Right - 9, box.Top + 4);
+                    graphics.DrawLine(pen, box.Left + 9, box.Bottom - 4, box.Left + 9, box.Bottom);
+                    graphics.DrawLine(pen, box.Right - 9, box.Bottom - 4, box.Right - 9, box.Bottom);
                 }
             }
         }
@@ -814,14 +1042,15 @@ namespace PcManagerLite
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (GraphicsPath path = Ui.RoundedPath(
                 new Rectangle(0, 0, Width - 1, Height - 1),
-                16))
-            using (LinearGradientBrush brush = new LinearGradientBrush(
-                ClientRectangle,
-                Palette.HeroStart,
-                Palette.HeroEnd,
-                18F))
+                12))
+            using (SolidBrush brush = new SolidBrush(
+                Palette.IsDark ? Color.FromArgb(29, 41, 52) : Color.FromArgb(233, 242, 252)))
             {
                 e.Graphics.FillPath(brush, path);
+                using (Pen pen = new Pen(Palette.Border, 1F))
+                {
+                    e.Graphics.DrawPath(pen, path);
+                }
             }
         }
     }
@@ -870,7 +1099,10 @@ namespace PcManagerLite
                 size,
                 size);
 
-            using (Pen background = new Pen(Color.FromArgb(82, 255, 255, 255), 10F))
+            Color trackColor = Palette.IsDark
+                ? Color.FromArgb(55, 255, 255, 255)
+                : Color.FromArgb(30, Palette.Accent);
+            using (Pen background = new Pen(trackColor, 10F))
             {
                 background.StartCap = LineCap.Round;
                 background.EndCap = LineCap.Round;
@@ -878,7 +1110,7 @@ namespace PcManagerLite
             }
 
             int value = _score < 0 ? 360 : (int)(360.0 * _score / 100.0);
-            using (Pen foreground = new Pen(Color.White, 10F))
+            using (Pen foreground = new Pen(Palette.Accent, 10F))
             {
                 foreground.StartCap = LineCap.Round;
                 foreground.EndCap = LineCap.Round;
@@ -894,7 +1126,7 @@ namespace PcManagerLite
                     number,
                     numberFont,
                     numberArea,
-                    Color.White,
+                    Palette.Ink,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             TextRenderer.DrawText(
@@ -902,7 +1134,7 @@ namespace PcManagerLite
                 _status,
                 Palette.BodyBold,
                 new Rectangle(0, ring.Top + 72, Width, 24),
-                Color.White,
+                Palette.Ink,
                 TextFormatFlags.HorizontalCenter);
         }
     }
@@ -936,7 +1168,7 @@ namespace PcManagerLite
             button.FlatStyle = FlatStyle.Flat;
             button.FlatAppearance.BorderSize = primary ? 0 : 1;
             button.FlatAppearance.BorderColor = Palette.Border;
-            button.BackColor = primary ? Palette.Accent : Color.White;
+            button.BackColor = primary ? Palette.Accent : Palette.Card;
             button.ForeColor = primary ? Color.White : Palette.Ink;
             button.Font = Palette.BodyBold;
             button.Cursor = Cursors.Hand;
@@ -947,12 +1179,18 @@ namespace PcManagerLite
                 {
                     button.BackColor = button.Enabled
                         ? Palette.Accent
-                        : Color.FromArgb(183, 207, 234);
-                    button.ForeColor = Color.White;
+                        : Palette.IsDark
+                            ? Color.FromArgb(49, 72, 97)
+                            : Color.FromArgb(183, 207, 234);
+                    button.ForeColor = button.Enabled
+                        ? Color.White
+                        : Palette.Muted;
                 }
                 else
                 {
-                    button.BackColor = button.Enabled ? Color.White : Color.FromArgb(246, 248, 251);
+                    button.BackColor = button.Enabled
+                        ? Palette.Card
+                        : Palette.SoftBlue;
                     button.ForeColor = button.Enabled ? Palette.Ink : Palette.Muted;
                 }
             };
@@ -962,7 +1200,7 @@ namespace PcManagerLite
                 {
                     return;
                 }
-                button.BackColor = primary ? Palette.AccentHover : Color.FromArgb(247, 251, 255);
+                button.BackColor = primary ? Palette.AccentHover : Palette.SoftBlue;
             };
             button.MouseLeave += delegate
             {
@@ -970,7 +1208,7 @@ namespace PcManagerLite
                 {
                     return;
                 }
-                button.BackColor = primary ? Palette.Accent : Color.White;
+                button.BackColor = primary ? Palette.Accent : Palette.Card;
             };
             return button;
         }
@@ -1134,18 +1372,18 @@ namespace PcManagerLite
             heroText.Dock = DockStyle.Fill;
             heroText.BackColor = Color.Transparent;
             Label heroTitle = Ui.Label(
-                "让游戏运行得更轻快",
+                "系统状态概览",
                 new Font("Microsoft YaHei UI", 18F, FontStyle.Bold),
-                Color.White,
+                Palette.Ink,
                 ContentAlignment.MiddleLeft);
             heroTitle.AutoSize = true;
             heroTitle.Location = new Point(0, 10);
             heroText.Controls.Add(heroTitle);
 
             Label heroDescription = Ui.Label(
-                "一次体检会检查可清理文件、网络状态、游戏后台负载和虚拟内存位置。",
+                "检查垃圾、网络、游戏进程和虚拟内存；扫描不会自动修改系统。",
                 Palette.Body,
-                Color.FromArgb(230, 255, 255, 255),
+                Palette.Muted,
                 ContentAlignment.MiddleLeft);
             heroDescription.AutoSize = false;
             heroDescription.Size = new Size(470, 48);
@@ -1158,8 +1396,8 @@ namespace PcManagerLite
             _checkButton.Height = 38;
             _checkButton.FlatStyle = FlatStyle.Flat;
             _checkButton.FlatAppearance.BorderSize = 0;
-            _checkButton.BackColor = Color.White;
-            _checkButton.ForeColor = Palette.AccentDark;
+            _checkButton.BackColor = Palette.Accent;
+            _checkButton.ForeColor = Color.White;
             _checkButton.Font = Palette.BodyBold;
             _checkButton.Cursor = Cursors.Hand;
             _checkButton.Location = new Point(0, 107);
@@ -1175,7 +1413,7 @@ namespace PcManagerLite
             _checkButtonLabel = Ui.Label(
                 "扫描过程不会自动删除任何文件",
                 Palette.Small,
-                Color.FromArgb(220, 255, 255, 255),
+                Palette.Muted,
                 ContentAlignment.MiddleLeft);
             _checkButtonLabel.AutoSize = true;
             _checkButtonLabel.Location = new Point(146, 116);
@@ -2945,6 +3183,503 @@ namespace PcManagerLite
         }
     }
 
+    internal sealed class SettingsPage : UserControl
+    {
+        private readonly MainForm _owner;
+        private readonly ManagerSettings _settings;
+        private readonly Label _currentVersion;
+        private readonly Label _latestVersion;
+        private readonly Label _updateStatus;
+        private readonly RichTextBox _releaseNotes;
+        private readonly Button _checkButton;
+        private readonly Button _installButton;
+        private readonly ProgressBar _progress;
+        private readonly CheckBox _checkOnStart;
+        private readonly CheckBox _startWithWindows;
+        private readonly ComboBox _themeCombo;
+        private readonly Label _preferenceStatus;
+        private bool _busy;
+        private bool _loading;
+        private UpdateCheckResult _lastCheck;
+
+        public SettingsPage(MainForm owner, ManagerSettings settings)
+        {
+            _owner = owner;
+            _settings = settings;
+            BackColor = Palette.Canvas;
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 4;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 224F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 206F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            Controls.Add(root);
+
+            root.Controls.Add(
+                Ui.BuildPageHeader(
+                    "设置",
+                    "软件更新、启动行为和界面主题",
+                    null,
+                    null),
+                0,
+                0);
+
+            RoundedPanel updateCard = new RoundedPanel();
+            updateCard.Dock = DockStyle.Fill;
+            updateCard.Margin = new Padding(0, 0, 0, 12);
+            updateCard.Padding = new Padding(18, 14, 18, 12);
+
+            TableLayoutPanel updateLayout = new TableLayoutPanel();
+            updateLayout.Dock = DockStyle.Fill;
+            updateLayout.ColumnCount = 2;
+            updateLayout.RowCount = 3;
+            updateLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            updateLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340F));
+            updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+            updateLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            Label updateTitle = Ui.Label(
+                "软件更新",
+                Palette.SectionTitle,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            updateTitle.Dock = DockStyle.Fill;
+            updateLayout.Controls.Add(updateTitle, 0, 0);
+
+            FlowLayoutPanel updateButtons = new FlowLayoutPanel();
+            updateButtons.Dock = DockStyle.Fill;
+            updateButtons.FlowDirection = FlowDirection.RightToLeft;
+            updateButtons.WrapContents = false;
+            _installButton = Ui.CreateButton("下载并安装", true);
+            _installButton.Width = 112;
+            _installButton.Enabled = false;
+            _installButton.Click += delegate { InstallUpdate(); };
+            _checkButton = Ui.CreateButton("检查更新", false);
+            _checkButton.Width = 96;
+            _checkButton.Click += delegate { CheckUpdates(true); };
+            updateButtons.Controls.Add(_installButton);
+            updateButtons.Controls.Add(_checkButton);
+            updateLayout.Controls.Add(updateButtons, 1, 0);
+
+            FlowLayoutPanel versionRow = new FlowLayoutPanel();
+            versionRow.Dock = DockStyle.Fill;
+            versionRow.WrapContents = false;
+            versionRow.Margin = new Padding(0);
+            _currentVersion = Ui.Label(
+                "当前版本 " + UpdateService.CurrentVersion(),
+                Palette.BodyBold,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            _currentVersion.AutoSize = true;
+            _currentVersion.Margin = new Padding(0, 8, 18, 0);
+            _latestVersion = Ui.Label(
+                "更新源：jokerx.top",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _latestVersion.AutoSize = true;
+            _latestVersion.Margin = new Padding(0, 10, 0, 0);
+            versionRow.Controls.Add(_currentVersion);
+            versionRow.Controls.Add(_latestVersion);
+            updateLayout.Controls.Add(versionRow, 0, 1);
+            updateLayout.SetColumnSpan(versionRow, 2);
+
+            _updateStatus = Ui.Label(
+                "点击“检查更新”连接中转站。更新文件会经过 SHA-256 校验。",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.TopLeft);
+            _updateStatus.Dock = DockStyle.Fill;
+            updateLayout.Controls.Add(_updateStatus, 0, 2);
+
+            Panel notesPanel = new Panel();
+            notesPanel.Dock = DockStyle.Fill;
+            notesPanel.Margin = new Padding(12, 0, 0, 0);
+            _releaseNotes = new RichTextBox();
+            _releaseNotes.Dock = DockStyle.Fill;
+            _releaseNotes.ReadOnly = true;
+            _releaseNotes.BorderStyle = BorderStyle.None;
+            _releaseNotes.BackColor = Palette.Card;
+            _releaseNotes.ForeColor = Palette.Muted;
+            _releaseNotes.Font = Palette.Small;
+            _releaseNotes.Text = "尚未检查更新。";
+            _progress = new ProgressBar();
+            _progress.Dock = DockStyle.Bottom;
+            _progress.Height = 4;
+            _progress.Style = ProgressBarStyle.Marquee;
+            _progress.Visible = false;
+            notesPanel.Controls.Add(_releaseNotes);
+            notesPanel.Controls.Add(_progress);
+            updateLayout.Controls.Add(notesPanel, 1, 2);
+
+            updateCard.Controls.Add(updateLayout);
+            root.Controls.Add(updateCard, 0, 1);
+
+            RoundedPanel preferences = new RoundedPanel();
+            preferences.Dock = DockStyle.Fill;
+            preferences.Margin = new Padding(0, 0, 0, 12);
+            preferences.Padding = new Padding(18, 12, 18, 12);
+
+            TableLayoutPanel preferenceLayout = new TableLayoutPanel();
+            preferenceLayout.Dock = DockStyle.Fill;
+            preferenceLayout.ColumnCount = 2;
+            preferenceLayout.RowCount = 5;
+            preferenceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            preferenceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 350F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            Label preferenceTitle = Ui.Label(
+                "使用偏好",
+                Palette.SectionTitle,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            preferenceTitle.Dock = DockStyle.Fill;
+            preferenceLayout.Controls.Add(preferenceTitle, 0, 0);
+            preferenceLayout.SetColumnSpan(preferenceTitle, 2);
+
+            _checkOnStart = CreateSettingCheck(
+                "启动时自动检查更新（只访问 jokerx.top）",
+                _settings.CheckUpdatesOnStart);
+            _checkOnStart.CheckedChanged += delegate
+            {
+                if (_loading)
+                {
+                    return;
+                }
+                _settings.CheckUpdatesOnStart = _checkOnStart.Checked;
+                _settings.Save();
+                _preferenceStatus.Visible = true;
+                _preferenceStatus.Text = _checkOnStart.Checked
+                    ? "已开启启动时检查更新"
+                    : "已关闭启动时检查更新";
+                _preferenceStatus.ForeColor = Palette.Success;
+            };
+            preferenceLayout.Controls.Add(_checkOnStart, 0, 1);
+            preferenceLayout.SetColumnSpan(_checkOnStart, 2);
+
+            _startWithWindows = CreateSettingCheck(
+                "随 Windows 登录启动（启动时最小化到任务栏）",
+                false);
+            _startWithWindows.CheckedChanged += delegate
+            {
+                if (_loading)
+                {
+                    return;
+                }
+                try
+                {
+                    AppStartupService.SetEnabled(_startWithWindows.Checked);
+                    _preferenceStatus.Visible = true;
+                    _preferenceStatus.Text = _startWithWindows.Checked
+                        ? "已设置开机自启动"
+                        : "已关闭开机自启动";
+                    _preferenceStatus.ForeColor = Palette.Success;
+                }
+                catch (Exception ex)
+                {
+                    _loading = true;
+                    _startWithWindows.Checked = AppStartupService.IsEnabled();
+                    _loading = false;
+                    _preferenceStatus.Visible = true;
+                    _preferenceStatus.Text = "设置失败：" + ex.Message;
+                    _preferenceStatus.ForeColor = Palette.Danger;
+                }
+            };
+            preferenceLayout.Controls.Add(_startWithWindows, 0, 2);
+            preferenceLayout.SetColumnSpan(_startWithWindows, 2);
+
+            TableLayoutPanel themeRow = new TableLayoutPanel();
+            themeRow.Dock = DockStyle.Fill;
+            themeRow.ColumnCount = 3;
+            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124F));
+            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112F));
+
+            Label themeLabel = Ui.Label(
+                "界面主题",
+                Palette.Body,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            themeLabel.Dock = DockStyle.Fill;
+            _themeCombo = new ComboBox();
+            _themeCombo.Dock = DockStyle.Fill;
+            _themeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            _themeCombo.Font = Palette.Body;
+            _themeCombo.Items.AddRange(new object[] { "跟随系统", "浅色", "深色" });
+            _themeCombo.Margin = new Padding(0, 5, 8, 5);
+            Button applyTheme = Ui.CreateButton("应用并重启", false);
+            applyTheme.Dock = DockStyle.Fill;
+            applyTheme.Margin = new Padding(0, 4, 0, 4);
+            applyTheme.Click += delegate { ApplyTheme(); };
+            themeRow.Controls.Add(themeLabel, 0, 0);
+            themeRow.Controls.Add(_themeCombo, 1, 0);
+            themeRow.Controls.Add(applyTheme, 2, 0);
+            preferenceLayout.Controls.Add(themeRow, 0, 3);
+            preferenceLayout.SetColumnSpan(themeRow, 2);
+
+            _preferenceStatus = Ui.Label(
+                "",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _preferenceStatus.Dock = DockStyle.Fill;
+            preferenceLayout.Controls.Add(_preferenceStatus, 0, 4);
+            preferenceLayout.SetColumnSpan(_preferenceStatus, 2);
+            preferences.Controls.Add(preferenceLayout);
+            root.Controls.Add(preferences, 0, 2);
+
+            RoundedPanel about = new RoundedPanel();
+            about.Dock = DockStyle.Fill;
+            about.Padding = new Padding(18, 12, 18, 10);
+            TableLayoutPanel aboutLayout = new TableLayoutPanel();
+            aboutLayout.Dock = DockStyle.Fill;
+            aboutLayout.ColumnCount = 1;
+            aboutLayout.RowCount = 3;
+            aboutLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+            aboutLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            aboutLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26F));
+            Label aboutTitle = Ui.Label(
+                "更新与发布",
+                Palette.BodyBold,
+                Palette.Ink,
+                ContentAlignment.TopLeft);
+            aboutTitle.Dock = DockStyle.Fill;
+            Label aboutText = Ui.Label(
+                "软件更新只从 jokerx.top 获取，不依赖 GitHub 代理。源码与历史版本可从 GitHub 仓库查看。",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.TopLeft);
+            aboutText.Dock = DockStyle.Fill;
+            LinkLabel links = new LinkLabel();
+            links.Dock = DockStyle.Fill;
+            links.Text = "jokerx.top 软件管理    GitHub 源码";
+            links.Links.Add(0, 20, "https://jokerx.top/projects/software/index.html");
+            links.Links.Add(22, links.Text.Length - 22, "https://github.com/jokerXYH/pc-manager-lite");
+            links.LinkColor = Palette.Accent;
+            links.ActiveLinkColor = Palette.AccentHover;
+            links.LinkClicked += delegate(object sender, LinkLabelLinkClickedEventArgs e)
+            {
+                try
+                {
+                    Process.Start(Convert.ToString(e.Link.LinkData));
+                }
+                catch
+                {
+                }
+            };
+            aboutLayout.Controls.Add(aboutTitle, 0, 0);
+            aboutLayout.Controls.Add(aboutText, 0, 1);
+            aboutLayout.Controls.Add(links, 0, 2);
+            about.Controls.Add(aboutLayout);
+            root.Controls.Add(about, 0, 3);
+
+            Load += delegate { RefreshState(); };
+        }
+
+        public void AutoCheck()
+        {
+            if (_settings.CheckUpdatesOnStart)
+            {
+                CheckUpdates(false);
+            }
+        }
+
+        public void RefreshState()
+        {
+            _loading = true;
+            _checkOnStart.Checked = _settings.CheckUpdatesOnStart;
+            _startWithWindows.Checked = AppStartupService.IsEnabled();
+            if (_settings.Theme == "light")
+            {
+                _themeCombo.SelectedIndex = 1;
+            }
+            else if (_settings.Theme == "dark")
+            {
+                _themeCombo.SelectedIndex = 2;
+            }
+            else
+            {
+                _themeCombo.SelectedIndex = 0;
+            }
+            _loading = false;
+            _preferenceStatus.Text = AppStartupService.IsEnabled()
+                ? "当前已启用开机自启动"
+                : "当前未启用开机自启动";
+            _preferenceStatus.ForeColor = Palette.Muted;
+        }
+
+        private void CheckUpdates(bool manual)
+        {
+            if (_busy)
+            {
+                return;
+            }
+            _busy = true;
+            SetUpdateBusy(true, "正在连接 jokerx.top 检查更新…");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                UpdateCheckResult result = UpdateService.Check();
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    _lastCheck = result;
+                    SetUpdateBusy(false, null);
+                    ShowCheckResult(result);
+                    if (manual && !String.IsNullOrWhiteSpace(result.Error))
+                    {
+                        FileLogger.Write("手动检查更新失败: " + result.Error);
+                    }
+                });
+            });
+        }
+
+        private void ShowCheckResult(UpdateCheckResult result)
+        {
+            _currentVersion.Text = "当前版本 " + result.CurrentVersion;
+            if (!String.IsNullOrWhiteSpace(result.Error))
+            {
+                _latestVersion.Text = "检查失败";
+                _updateStatus.Text = result.Error;
+                _updateStatus.ForeColor = Palette.Danger;
+                _releaseNotes.Text = "更新服务器暂时不可用，可稍后重试。";
+                _installButton.Enabled = false;
+                return;
+            }
+            _latestVersion.Text = "服务器版本 " + result.LatestVersion;
+            _updateStatus.ForeColor = Palette.Success;
+            if (result.Available)
+            {
+                _updateStatus.Text = "发现新版本，可直接下载并安装。";
+                _releaseNotes.Text = result.Info.Notes.Count == 0
+                    ? "暂无更新说明。"
+                    : "• " + String.Join("\r\n• ", result.Info.Notes.ToArray());
+                _installButton.Enabled = true;
+            }
+            else
+            {
+                _updateStatus.Text = "当前已是最新版本。";
+                _releaseNotes.Text = "无需更新。";
+                _installButton.Enabled = false;
+            }
+        }
+
+        private void InstallUpdate()
+        {
+            if (_busy || _lastCheck == null || !_lastCheck.Available)
+            {
+                return;
+            }
+            UpdateInfo info = _lastCheck.Info;
+            _busy = true;
+            SetUpdateBusy(true, "正在下载并校验更新…");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string downloaded;
+                string error;
+                bool ok = UpdateService.DownloadVerified(
+                    info,
+                    delegate(string text)
+                    {
+                        SafeBeginInvoke(delegate
+                        {
+                            _updateStatus.Text = text;
+                        });
+                    },
+                    out downloaded,
+                    out error);
+                SafeBeginInvoke(delegate
+                {
+                    if (!ok)
+                    {
+                        _busy = false;
+                        SetUpdateBusy(false, null);
+                        _updateStatus.Text = "更新失败：" + error;
+                        _updateStatus.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    _updateStatus.Text = "更新校验通过，正在重启安装…";
+                    _updateStatus.ForeColor = Palette.Success;
+                    if (UpdateService.StartUpdaterAndExit(downloaded))
+                    {
+                        Application.Exit();
+                    }
+                    else
+                    {
+                        _busy = false;
+                        SetUpdateBusy(false, null);
+                        _updateStatus.Text = "无法启动更新程序，请检查文件权限。";
+                        _updateStatus.ForeColor = Palette.Danger;
+                    }
+                });
+            });
+        }
+
+        private void ApplyTheme()
+        {
+            int index = _themeCombo.SelectedIndex;
+            _settings.Theme = index == 1 ? "light" : index == 2 ? "dark" : "system";
+            _settings.Save();
+            _preferenceStatus.Visible = true;
+            if (AppLifecycleService.RelaunchAfterExit())
+            {
+                Application.Exit();
+            }
+            else
+            {
+                _preferenceStatus.Text = "主题已保存，请手动关闭并重新打开管家。";
+                _preferenceStatus.ForeColor = Palette.Warning;
+            }
+        }
+
+        private void SetUpdateBusy(bool busy, string text)
+        {
+            _checkButton.Enabled = !busy;
+            _installButton.Enabled = !busy && _lastCheck != null && _lastCheck.Available;
+            _progress.Visible = busy;
+            if (!String.IsNullOrWhiteSpace(text))
+            {
+                _updateStatus.Text = text;
+                _updateStatus.ForeColor = Palette.AccentDark;
+            }
+        }
+
+        private static CheckBox CreateSettingCheck(string text, bool value)
+        {
+            CheckBox check = new CheckBox();
+            check.Text = text;
+            check.Checked = value;
+            check.AutoSize = true;
+            check.Font = Palette.Body;
+            check.ForeColor = Palette.Ink;
+            check.Margin = new Padding(0, 7, 0, 4);
+            check.Cursor = Cursors.Hand;
+            return check;
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
     internal sealed class StartupPage : UserControl
     {
         private readonly DataGridView _grid;
@@ -3743,6 +4478,46 @@ namespace PcManagerLite
                         " | " + item.Command);
                 }
 
+                string runKeyPath =
+                    @"Software\Microsoft\Windows\CurrentVersion\Run";
+                object originalAutostart = null;
+                bool autostartOn = false;
+                bool autostartOff = false;
+                try
+                {
+                    using (RegistryKey runKey = Registry.CurrentUser.OpenSubKey(runKeyPath, false))
+                    {
+                        if (runKey != null)
+                        {
+                            originalAutostart = runKey.GetValue("PcManagerLite", null);
+                        }
+                    }
+                    AppStartupService.SetEnabled(true);
+                    autostartOn = AppStartupService.IsEnabled();
+                    AppStartupService.SetEnabled(false);
+                    autostartOff = !AppStartupService.IsEnabled();
+                }
+                finally
+                {
+                    using (RegistryKey runKey = Registry.CurrentUser.CreateSubKey(runKeyPath))
+                    {
+                        if (originalAutostart == null)
+                        {
+                            runKey.DeleteValue("PcManagerLite", false);
+                        }
+                        else
+                        {
+                            runKey.SetValue(
+                                "PcManagerLite",
+                                originalAutostart,
+                                RegistryValueKind.String);
+                        }
+                    }
+                }
+                report.AppendLine(
+                    "Self-start toggle test: on=" + autostartOn +
+                    ", off=" + autostartOff);
+
                 List<ProcessGroup> groups = ProcessScanner.ScanGroups();
                 report.AppendLine("Candidate process groups: " + groups.Count);
                 foreach (ProcessGroup group in groups)
@@ -3805,7 +4580,11 @@ namespace PcManagerLite
                     Directory.CreateDirectory(directory);
                 }
                 File.WriteAllText(reportPath, report.ToString(), Encoding.UTF8);
-                return safeDelete && frameParser && games.RunningGames != null;
+                return safeDelete &&
+                    frameParser &&
+                    autostartOn &&
+                    autostartOff &&
+                    games.RunningGames != null;
             }
             catch (Exception ex)
             {
@@ -3833,6 +4612,15 @@ namespace PcManagerLite
                     Application.DoEvents();
                     form.NavigateForTest(page);
                     Application.DoEvents();
+                    if (String.Equals(page, "settings", StringComparison.OrdinalIgnoreCase))
+                    {
+                        DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+                        while (DateTime.UtcNow < deadline)
+                        {
+                            Application.DoEvents();
+                            Thread.Sleep(50);
+                        }
+                    }
                     form.PerformLayout();
                     Application.DoEvents();
 

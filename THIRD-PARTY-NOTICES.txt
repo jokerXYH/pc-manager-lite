@@ -1,4 +1,4 @@
-电脑管家 Lite 2.2 - Third-party notices
+电脑管家 Lite 2.3 - Third-party notices
 
 This application integrates with or derives selected safety and category ideas
 from the following MIT-licensed projects. No GPL-only source code was copied.
