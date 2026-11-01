@@ -199,6 +199,19 @@ namespace PcManagerLite
             string rootPath,
             uint flags);
 
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(
+            IntPtr hwnd,
+            int attribute,
+            ref int value,
+            int valueSize);
+
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        private static extern int SetWindowTheme(
+            IntPtr hwnd,
+            string subApplicationName,
+            string subIdList);
+
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT
         {
@@ -243,6 +256,44 @@ namespace PcManagerLite
             try
             {
                 SetProcessWorkingSetSize(new IntPtr(-1), new IntPtr(-1), new IntPtr(-1));
+            }
+            catch
+            {
+            }
+        }
+
+        public static void ApplyWindowTheme(IntPtr hwnd, bool dark)
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+            try
+            {
+                int enabled = dark ? 1 : 0;
+                int result = DwmSetWindowAttribute(hwnd, 20, ref enabled, sizeof(int));
+                if (result != 0)
+                {
+                    DwmSetWindowAttribute(hwnd, 19, ref enabled, sizeof(int));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        public static void ApplyControlTheme(IntPtr hwnd, bool dark, bool combo)
+        {
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+            try
+            {
+                string theme = dark
+                    ? combo ? "DarkMode_CFD" : "DarkMode_Explorer"
+                    : null;
+                SetWindowTheme(hwnd, theme, null);
             }
             catch
             {
@@ -3191,6 +3242,31 @@ namespace PcManagerLite
 
     internal static class UpdateService
     {
+        private sealed class TimedWebClient : WebClient
+        {
+            private readonly int _timeoutMs;
+
+            public TimedWebClient(int timeoutMs)
+            {
+                _timeoutMs = timeoutMs;
+            }
+
+            protected override WebRequest GetWebRequest(Uri address)
+            {
+                WebRequest request = base.GetWebRequest(address);
+                if (request != null)
+                {
+                    request.Timeout = _timeoutMs;
+                    HttpWebRequest http = request as HttpWebRequest;
+                    if (http != null)
+                    {
+                        http.ReadWriteTimeout = _timeoutMs;
+                    }
+                }
+                return request;
+            }
+        }
+
         public const string ManifestUrl =
             "https://jokerx.top/downloads/pc-manager-lite/version.js";
         public const string DefaultDownloadUrl =
@@ -3206,12 +3282,55 @@ namespace PcManagerLite
 
         public static UpdateCheckResult Check()
         {
+            UpdateCheckResult result = null;
+            using (ManualResetEventSlim completed = new ManualResetEventSlim(false))
+            {
+                Thread worker = new Thread(delegate()
+                {
+                    try
+                    {
+                        result = CheckCore();
+                    }
+                    catch (Exception ex)
+                    {
+                        result = new UpdateCheckResult
+                        {
+                            CurrentVersion = CurrentVersion(),
+                            Error = ex.Message
+                        };
+                    }
+                    finally
+                    {
+                        completed.Set();
+                    }
+                });
+                worker.IsBackground = true;
+                worker.Name = "PcManagerLiteUpdateCheck";
+                worker.Start();
+                if (!completed.Wait(15000))
+                {
+                    return new UpdateCheckResult
+                    {
+                        CurrentVersion = CurrentVersion(),
+                        Error = "检查更新超时，请稍后重试。"
+                    };
+                }
+            }
+            return result ?? new UpdateCheckResult
+            {
+                CurrentVersion = CurrentVersion(),
+                Error = "检查更新未返回结果。"
+            };
+        }
+
+        private static UpdateCheckResult CheckCore()
+        {
             UpdateCheckResult result = new UpdateCheckResult();
             result.CurrentVersion = CurrentVersion();
             try
             {
                 ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-                using (WebClient client = new WebClient())
+                using (WebClient client = new TimedWebClient(12000))
                 {
                     client.Encoding = Encoding.UTF8;
                     client.Headers[HttpRequestHeader.UserAgent] =
@@ -3315,7 +3434,7 @@ namespace PcManagerLite
                 {
                     progress("正在从 jokerx.top 下载更新…");
                 }
-                using (WebClient client = new WebClient())
+                using (WebClient client = new TimedWebClient(90000))
                 {
                     client.Headers[HttpRequestHeader.UserAgent] =
                         "PcManagerLite/" + CurrentVersion();

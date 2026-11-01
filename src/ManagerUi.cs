@@ -14,8 +14,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("轻量的清理、游戏加速与网络修复工具")]
 [assembly: System.Reflection.AssemblyProduct("电脑管家 Lite")]
 [assembly: System.Reflection.AssemblyCompany("Local")]
-[assembly: System.Reflection.AssemblyVersion("2.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.3.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.3.1.0")]
 
 namespace PcManagerLite
 {
@@ -68,7 +68,10 @@ namespace PcManagerLite
             if (screenshot != null)
             {
                 string page = GetArgumentValue(args, "--page");
-                Environment.ExitCode = SelfTest.SaveScreenshot(screenshot, page) ? 0 : 1;
+                Environment.ExitCode = SelfTest.SaveScreenshot(
+                    screenshot,
+                    page,
+                    forcedTheme) ? 0 : 1;
                 return;
             }
 
@@ -426,13 +429,14 @@ namespace PcManagerLite
             new Dictionary<ManagerView, Control>();
         private readonly Dictionary<ManagerView, SidebarButton> _navButtons =
             new Dictionary<ManagerView, SidebarButton>();
-        private readonly DashboardPage _dashboardPage;
-        private readonly CleanupPage _cleanupPage;
-        private readonly GamePage _gamePage;
-        private readonly NetworkPage _networkPage;
-        private readonly StartupPage _startupPage;
-        private readonly RecoveryPage _recoveryPage;
-        private readonly SettingsPage _settingsPage;
+        private DashboardPage _dashboardPage;
+        private CleanupPage _cleanupPage;
+        private GamePage _gamePage;
+        private NetworkPage _networkPage;
+        private StartupPage _startupPage;
+        private RecoveryPage _recoveryPage;
+        private SettingsPage _settingsPage;
+        private Panel _sidebarPanel;
         private readonly ManagerSettings _settings;
         private bool _quickChecking;
         private ManagerView _activeView = ManagerView.Dashboard;
@@ -455,14 +459,47 @@ namespace PcManagerLite
             AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
 
-            Panel sidebar = BuildSidebar();
             _contentHost = new Panel();
             _contentHost.Dock = DockStyle.Fill;
             _contentHost.BackColor = Palette.Canvas;
             _contentHost.Padding = new Padding(22, 18, 22, 18);
             Controls.Add(_contentHost);
-            Controls.Add(sidebar);
+            BuildWorkspace();
+            HandleCreated += delegate
+            {
+                NativeSystem.ApplyWindowTheme(Handle, Palette.IsDark);
+            };
 
+            Load += delegate
+            {
+                Navigate(ManagerView.Dashboard);
+                UpdateKnownSystemState();
+                if (startMinimized)
+                {
+                    WindowState = FormWindowState.Minimized;
+                }
+                if (_settings.CheckUpdatesOnStart)
+                {
+                    _settingsPage.AutoCheck();
+                }
+            };
+            Resize += delegate
+            {
+                if (WindowState == FormWindowState.Minimized)
+                {
+                    NativeSystem.TrimCurrentProcessWorkingSet();
+                }
+            };
+        }
+
+        private void BuildWorkspace()
+        {
+            _navButtons.Clear();
+            _sidebarPanel = BuildSidebar();
+            Controls.Add(_sidebarPanel);
+
+            _pages.Clear();
+            _contentHost.Controls.Clear();
             _dashboardPage = new DashboardPage();
             _cleanupPage = new CleanupPage();
             _gamePage = new GamePage(this);
@@ -488,27 +525,48 @@ namespace PcManagerLite
 
             _dashboardPage.NavigateRequested += Navigate;
             _dashboardPage.QuickCheckRequested += StartQuickCheck;
+        }
 
-            Load += delegate
+        public void SwitchTheme(string theme)
+        {
+            ManagerView previous = _activeView;
+            _settings.Theme = String.IsNullOrWhiteSpace(theme)
+                ? "system"
+                : theme.ToLowerInvariant();
+            _settings.Save();
+            Palette.ApplyMode(_settings.Theme);
+            NativeSystem.ApplyWindowTheme(Handle, Palette.IsDark);
+
+            SuspendLayout();
+            _contentHost.SuspendLayout();
+            try
             {
-                Navigate(ManagerView.Dashboard);
+                foreach (Control page in new List<Control>(_pages.Values))
+                {
+                    _contentHost.Controls.Remove(page);
+                    page.Dispose();
+                }
+                _pages.Clear();
+                if (_sidebarPanel != null)
+                {
+                    Controls.Remove(_sidebarPanel);
+                    _sidebarPanel.Dispose();
+                    _sidebarPanel = null;
+                }
+
+                BackColor = Palette.Canvas;
+                ForeColor = Palette.Ink;
+                Font = Palette.Body;
+                _contentHost.BackColor = Palette.Canvas;
+                BuildWorkspace();
+                Navigate(previous);
                 UpdateKnownSystemState();
-                if (startMinimized)
-                {
-                    WindowState = FormWindowState.Minimized;
-                }
-                if (_settings.CheckUpdatesOnStart)
-                {
-                    _settingsPage.AutoCheck();
-                }
-            };
-            Resize += delegate
+            }
+            finally
             {
-                if (WindowState == FormWindowState.Minimized)
-                {
-                    NativeSystem.TrimCurrentProcessWorkingSet();
-                }
-            };
+                _contentHost.ResumeLayout(true);
+                ResumeLayout(true);
+            }
         }
 
         public void Navigate(ManagerView view)
@@ -629,7 +687,7 @@ namespace PcManagerLite
             brand.Controls.Add(name);
 
             Label version = new Label();
-            version.Text = "轻量版 2.3";
+            version.Text = "轻量版 " + UpdateService.CurrentVersion();
             version.Font = Palette.Small;
             version.ForeColor = Palette.SidebarMuted;
             version.AutoSize = true;
@@ -1272,7 +1330,10 @@ namespace PcManagerLite
 
         public static void StyleGrid(DataGridView grid)
         {
-            grid.BackgroundColor = Color.White;
+            Color header = Palette.IsDark
+                ? Color.FromArgb(36, 47, 59)
+                : Color.FromArgb(248, 251, 254);
+            grid.BackgroundColor = Palette.Card;
             grid.BorderStyle = BorderStyle.None;
             grid.AllowUserToAddRows = false;
             grid.AllowUserToDeleteRows = false;
@@ -1283,19 +1344,27 @@ namespace PcManagerLite
             grid.EnableHeadersVisualStyles = false;
             grid.ColumnHeadersHeight = 38;
             grid.RowTemplate.Height = 42;
-            grid.GridColor = Color.FromArgb(235, 241, 247);
+            grid.GridColor = Palette.Border;
             grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-            grid.DefaultCellStyle.BackColor = Color.White;
+            grid.DefaultCellStyle.BackColor = Palette.Card;
             grid.DefaultCellStyle.ForeColor = Palette.Ink;
             grid.DefaultCellStyle.SelectionBackColor = Palette.SoftBlue;
             grid.DefaultCellStyle.SelectionForeColor = Palette.Ink;
             grid.DefaultCellStyle.Font = Palette.Body;
             grid.DefaultCellStyle.Padding = new Padding(5, 0, 5, 0);
-            grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(248, 251, 254);
+            grid.ColumnHeadersDefaultCellStyle.BackColor = header;
             grid.ColumnHeadersDefaultCellStyle.ForeColor = Palette.Muted;
-            grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Color.FromArgb(248, 251, 254);
+            grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = header;
             grid.ColumnHeadersDefaultCellStyle.Font = Palette.Small;
             grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            grid.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(grid.Handle, Palette.IsDark, false);
+            };
+            if (grid.IsHandleCreated)
+            {
+                NativeSystem.ApplyControlTheme(grid.Handle, Palette.IsDark, false);
+            }
         }
 
         public static void CenterOnOwner(Form form, Control owner)
@@ -2208,10 +2277,44 @@ namespace PcManagerLite
 
             _gameCombo = new ComboBox();
             _gameCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+            _gameCombo.FlatStyle = FlatStyle.Flat;
+            _gameCombo.DrawMode = DrawMode.OwnerDrawFixed;
             _gameCombo.Font = Palette.Body;
+            _gameCombo.BackColor = Palette.Card;
+            _gameCombo.ForeColor = Palette.Ink;
             _gameCombo.Location = new Point(16, 43);
             _gameCombo.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
             _gameCombo.Width = 360;
+            _gameCombo.DrawItem += delegate(object sender, DrawItemEventArgs e)
+            {
+                if (e.Index < 0)
+                {
+                    return;
+                }
+                bool isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+                using (SolidBrush background = new SolidBrush(
+                    isSelected ? Palette.SoftBlue : Palette.Card))
+                {
+                    e.Graphics.FillRectangle(background, e.Bounds);
+                }
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    Convert.ToString(_gameCombo.Items[e.Index]),
+                    Palette.Body,
+                    e.Bounds,
+                    Palette.Ink,
+                    TextFormatFlags.Left |
+                    TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.EndEllipsis);
+            };
+            _gameCombo.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(_gameCombo.Handle, Palette.IsDark, true);
+            };
+            if (_gameCombo.IsHandleCreated)
+            {
+                NativeSystem.ApplyControlTheme(_gameCombo.Handle, Palette.IsDark, true);
+            }
             frameCard.Controls.Add(_gameCombo);
 
             _frameButton = Ui.CreateButton("采样 30 秒", true);
@@ -2938,9 +3041,13 @@ namespace PcManagerLite
             _repairLog.Dock = DockStyle.Fill;
             _repairLog.ReadOnly = true;
             _repairLog.BorderStyle = BorderStyle.None;
-            _repairLog.BackColor = Color.White;
+            _repairLog.BackColor = Palette.Card;
             _repairLog.ForeColor = Palette.Ink;
             _repairLog.Font = Palette.Body;
+            _repairLog.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(_repairLog.Handle, Palette.IsDark, false);
+            };
             _repairLog.Text =
                 "网络修复记录\r\n\r\n" +
                 "快速修复：清空 DNS 缓存、刷新 ARP 并重新注册 DNS。\r\n" +
@@ -3196,7 +3303,9 @@ namespace PcManagerLite
         private readonly ProgressBar _progress;
         private readonly CheckBox _checkOnStart;
         private readonly CheckBox _startWithWindows;
-        private readonly ComboBox _themeCombo;
+        private readonly Button _systemThemeButton;
+        private readonly Button _lightThemeButton;
+        private readonly Button _darkThemeButton;
         private readonly Label _preferenceStatus;
         private bool _busy;
         private bool _loading;
@@ -3211,12 +3320,11 @@ namespace PcManagerLite
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 3;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 224F));
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 206F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108F));
             Controls.Add(root);
 
             root.Controls.Add(
@@ -3228,19 +3336,29 @@ namespace PcManagerLite
                 0,
                 0);
 
+            TableLayoutPanel body = new TableLayoutPanel();
+            body.Dock = DockStyle.Fill;
+            body.Margin = new Padding(0, 0, 0, 12);
+            body.ColumnCount = 2;
+            body.RowCount = 1;
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56F));
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44F));
+            root.Controls.Add(body, 0, 1);
+
             RoundedPanel updateCard = new RoundedPanel();
             updateCard.Dock = DockStyle.Fill;
-            updateCard.Margin = new Padding(0, 0, 0, 12);
+            updateCard.Margin = new Padding(0, 0, 6, 0);
             updateCard.Padding = new Padding(18, 14, 18, 12);
 
             TableLayoutPanel updateLayout = new TableLayoutPanel();
             updateLayout.Dock = DockStyle.Fill;
             updateLayout.ColumnCount = 2;
-            updateLayout.RowCount = 3;
+            updateLayout.RowCount = 4;
             updateLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            updateLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340F));
+            updateLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 224F));
             updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
-            updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+            updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+            updateLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
             updateLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             Label updateTitle = Ui.Label(
@@ -3295,18 +3413,28 @@ namespace PcManagerLite
                 Palette.Muted,
                 ContentAlignment.TopLeft);
             _updateStatus.Dock = DockStyle.Fill;
+            _updateStatus.Margin = new Padding(0, 4, 0, 4);
             updateLayout.Controls.Add(_updateStatus, 0, 2);
+            updateLayout.SetColumnSpan(_updateStatus, 2);
 
             Panel notesPanel = new Panel();
             notesPanel.Dock = DockStyle.Fill;
-            notesPanel.Margin = new Padding(12, 0, 0, 0);
+            notesPanel.Margin = new Padding(0);
             _releaseNotes = new RichTextBox();
             _releaseNotes.Dock = DockStyle.Fill;
             _releaseNotes.ReadOnly = true;
             _releaseNotes.BorderStyle = BorderStyle.None;
+            _releaseNotes.ScrollBars = RichTextBoxScrollBars.Vertical;
             _releaseNotes.BackColor = Palette.Card;
             _releaseNotes.ForeColor = Palette.Muted;
             _releaseNotes.Font = Palette.Small;
+            _releaseNotes.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(
+                    _releaseNotes.Handle,
+                    Palette.IsDark,
+                    false);
+            };
             _releaseNotes.Text = "尚未检查更新。";
             _progress = new ProgressBar();
             _progress.Dock = DockStyle.Bottom;
@@ -3315,14 +3443,15 @@ namespace PcManagerLite
             _progress.Visible = false;
             notesPanel.Controls.Add(_releaseNotes);
             notesPanel.Controls.Add(_progress);
-            updateLayout.Controls.Add(notesPanel, 1, 2);
+            updateLayout.Controls.Add(notesPanel, 0, 3);
+            updateLayout.SetColumnSpan(notesPanel, 2);
 
             updateCard.Controls.Add(updateLayout);
-            root.Controls.Add(updateCard, 0, 1);
+            body.Controls.Add(updateCard, 0, 0);
 
             RoundedPanel preferences = new RoundedPanel();
             preferences.Dock = DockStyle.Fill;
-            preferences.Margin = new Padding(0, 0, 0, 12);
+            preferences.Margin = new Padding(6, 0, 0, 0);
             preferences.Padding = new Padding(18, 12, 18, 12);
 
             TableLayoutPanel preferenceLayout = new TableLayoutPanel();
@@ -3399,30 +3528,56 @@ namespace PcManagerLite
 
             TableLayoutPanel themeRow = new TableLayoutPanel();
             themeRow.Dock = DockStyle.Fill;
-            themeRow.ColumnCount = 3;
+            themeRow.ColumnCount = 2;
             themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124F));
-            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112F));
+            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 286F));
 
             Label themeLabel = Ui.Label(
-                "界面主题",
+                "界面主题（点击立即切换）",
                 Palette.Body,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
             themeLabel.Dock = DockStyle.Fill;
-            _themeCombo = new ComboBox();
-            _themeCombo.Dock = DockStyle.Fill;
-            _themeCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            _themeCombo.Font = Palette.Body;
-            _themeCombo.Items.AddRange(new object[] { "跟随系统", "浅色", "深色" });
-            _themeCombo.Margin = new Padding(0, 5, 8, 5);
-            Button applyTheme = Ui.CreateButton("应用并重启", false);
-            applyTheme.Dock = DockStyle.Fill;
-            applyTheme.Margin = new Padding(0, 4, 0, 4);
-            applyTheme.Click += delegate { ApplyTheme(); };
+
+            FlowLayoutPanel themeButtons = new FlowLayoutPanel();
+            themeButtons.Dock = DockStyle.Fill;
+            themeButtons.FlowDirection = FlowDirection.LeftToRight;
+            themeButtons.WrapContents = false;
+            themeButtons.Margin = new Padding(0);
+
+            _systemThemeButton = Ui.CreateButton("跟随系统", false);
+            _systemThemeButton.Width = 86;
+            _systemThemeButton.Height = 29;
+            _systemThemeButton.Margin = new Padding(0, 4, 6, 4);
+            _systemThemeButton.Tag = "system";
+            _systemThemeButton.Click += delegate(object sender, EventArgs e)
+            {
+                RequestTheme((Button)sender);
+            };
+            _lightThemeButton = Ui.CreateButton("浅色", false);
+            _lightThemeButton.Width = 68;
+            _lightThemeButton.Height = 29;
+            _lightThemeButton.Margin = new Padding(0, 4, 6, 4);
+            _lightThemeButton.Tag = "light";
+            _lightThemeButton.Click += delegate(object sender, EventArgs e)
+            {
+                RequestTheme((Button)sender);
+            };
+            _darkThemeButton = Ui.CreateButton("深色", false);
+            _darkThemeButton.Width = 68;
+            _darkThemeButton.Height = 29;
+            _darkThemeButton.Margin = new Padding(0, 4, 0, 4);
+            _darkThemeButton.Tag = "dark";
+            _darkThemeButton.Click += delegate(object sender, EventArgs e)
+            {
+                RequestTheme((Button)sender);
+            };
+
+            themeButtons.Controls.Add(_systemThemeButton);
+            themeButtons.Controls.Add(_lightThemeButton);
+            themeButtons.Controls.Add(_darkThemeButton);
             themeRow.Controls.Add(themeLabel, 0, 0);
-            themeRow.Controls.Add(_themeCombo, 1, 0);
-            themeRow.Controls.Add(applyTheme, 2, 0);
+            themeRow.Controls.Add(themeButtons, 1, 0);
             preferenceLayout.Controls.Add(themeRow, 0, 3);
             preferenceLayout.SetColumnSpan(themeRow, 2);
 
@@ -3430,12 +3585,13 @@ namespace PcManagerLite
                 "",
                 Palette.Small,
                 Palette.Muted,
-                ContentAlignment.MiddleLeft);
+                ContentAlignment.TopLeft);
             _preferenceStatus.Dock = DockStyle.Fill;
+            _preferenceStatus.Margin = new Padding(0, 14, 0, 0);
             preferenceLayout.Controls.Add(_preferenceStatus, 0, 4);
             preferenceLayout.SetColumnSpan(_preferenceStatus, 2);
             preferences.Controls.Add(preferenceLayout);
-            root.Controls.Add(preferences, 0, 2);
+            body.Controls.Add(preferences, 1, 0);
 
             RoundedPanel about = new RoundedPanel();
             about.Dock = DockStyle.Fill;
@@ -3480,7 +3636,7 @@ namespace PcManagerLite
             aboutLayout.Controls.Add(aboutText, 0, 1);
             aboutLayout.Controls.Add(links, 0, 2);
             about.Controls.Add(aboutLayout);
-            root.Controls.Add(about, 0, 3);
+            root.Controls.Add(about, 0, 2);
 
             Load += delegate { RefreshState(); };
         }
@@ -3498,19 +3654,10 @@ namespace PcManagerLite
             _loading = true;
             _checkOnStart.Checked = _settings.CheckUpdatesOnStart;
             _startWithWindows.Checked = AppStartupService.IsEnabled();
-            if (_settings.Theme == "light")
-            {
-                _themeCombo.SelectedIndex = 1;
-            }
-            else if (_settings.Theme == "dark")
-            {
-                _themeCombo.SelectedIndex = 2;
-            }
-            else
-            {
-                _themeCombo.SelectedIndex = 0;
-            }
             _loading = false;
+            SetThemeButtonState(_systemThemeButton, _settings.Theme == "system");
+            SetThemeButtonState(_lightThemeButton, _settings.Theme == "light");
+            SetThemeButtonState(_darkThemeButton, _settings.Theme == "dark");
             _preferenceStatus.Text = AppStartupService.IsEnabled()
                 ? "当前已启用开机自启动"
                 : "当前未启用开机自启动";
@@ -3551,6 +3698,7 @@ namespace PcManagerLite
                 _updateStatus.Text = result.Error;
                 _updateStatus.ForeColor = Palette.Danger;
                 _releaseNotes.Text = "更新服务器暂时不可用，可稍后重试。";
+                _installButton.Text = "暂不可用";
                 _installButton.Enabled = false;
                 return;
             }
@@ -3562,12 +3710,14 @@ namespace PcManagerLite
                 _releaseNotes.Text = result.Info.Notes.Count == 0
                     ? "暂无更新说明。"
                     : "• " + String.Join("\r\n• ", result.Info.Notes.ToArray());
+                _installButton.Text = "下载并安装";
                 _installButton.Enabled = true;
             }
             else
             {
                 _updateStatus.Text = "当前已是最新版本。";
                 _releaseNotes.Text = "无需更新。";
+                _installButton.Text = "已是最新";
                 _installButton.Enabled = false;
             }
         }
@@ -3623,21 +3773,28 @@ namespace PcManagerLite
             });
         }
 
-        private void ApplyTheme()
+        private void RequestTheme(Button button)
         {
-            int index = _themeCombo.SelectedIndex;
-            _settings.Theme = index == 1 ? "light" : index == 2 ? "dark" : "system";
-            _settings.Save();
+            string theme = Convert.ToString(button.Tag);
+            if (String.Equals(theme, _settings.Theme, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
             _preferenceStatus.Visible = true;
-            if (AppLifecycleService.RelaunchAfterExit())
+            _preferenceStatus.Text = "正在切换主题…";
+            _preferenceStatus.ForeColor = Palette.AccentDark;
+            BeginInvoke(new Action(delegate
             {
-                Application.Exit();
-            }
-            else
-            {
-                _preferenceStatus.Text = "主题已保存，请手动关闭并重新打开管家。";
-                _preferenceStatus.ForeColor = Palette.Warning;
-            }
+                _owner.SwitchTheme(theme);
+            }));
+        }
+
+        private static void SetThemeButtonState(Button button, bool active)
+        {
+            button.BackColor = active ? Palette.Accent : Palette.Card;
+            button.ForeColor = active ? Color.White : Palette.Ink;
+            button.FlatAppearance.BorderSize = active ? 0 : 1;
+            button.FlatAppearance.BorderColor = Palette.Border;
         }
 
         private void SetUpdateBusy(bool busy, string text)
@@ -3645,6 +3802,7 @@ namespace PcManagerLite
             _checkButton.Enabled = !busy;
             _installButton.Enabled = !busy && _lastCheck != null && _lastCheck.Available;
             _progress.Visible = busy;
+            _checkButton.Text = busy ? "检查中…" : "检查更新";
             if (!String.IsNullOrWhiteSpace(text))
             {
                 _updateStatus.Text = text;
@@ -4199,9 +4357,13 @@ namespace PcManagerLite
             _activity.Dock = DockStyle.Fill;
             _activity.ReadOnly = true;
             _activity.BorderStyle = BorderStyle.None;
-            _activity.BackColor = Color.White;
+            _activity.BackColor = Palette.Card;
             _activity.ForeColor = Palette.Ink;
             _activity.Font = Palette.Body;
+            _activity.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(_activity.Handle, Palette.IsDark, false);
+            };
             _activity.Text = "尚未执行恢复操作。";
             activityLayout.Controls.Add(_status, 0, 0);
             activityLayout.Controls.Add(_activity, 0, 1);
@@ -4550,28 +4712,66 @@ namespace PcManagerLite
                 }
                 report.AppendLine("Immediate action model: enabled (no secondary confirmation)");
 
-                using (MainForm form = new MainForm())
+                string settingsPath = Path.Combine(AppPaths.DataDirectory, "settings.ini");
+                bool settingsExisted = File.Exists(settingsPath);
+                string originalSettings = settingsExisted
+                    ? File.ReadAllText(settingsPath, Encoding.UTF8)
+                    : null;
+                ManagerSettings themeSettings = ManagerSettings.Load();
+                string originalTheme = themeSettings.Theme;
+                themeSettings.CheckUpdatesOnStart = false;
+                bool themeSwitchPassed = false;
+                try
                 {
-                    form.ShowInTaskbar = false;
-                    form.StartPosition = FormStartPosition.Manual;
-                    form.Location = new Point(-20000, -20000);
-                    form.Show();
-                    Application.DoEvents();
-                    report.AppendLine(
-                        "UI working set before trim MB: " +
-                        (Process.GetCurrentProcess().WorkingSet64 / 1048576.0).ToString("0.0"));
-                    NativeSystem.TrimCurrentProcessWorkingSet();
-                    GC.Collect();
-                    GC.WaitForPendingFinalizers();
-                    NativeSystem.TrimCurrentProcessWorkingSet();
-                    report.AppendLine(
-                        "UI working set after trim MB: " +
-                        (Process.GetCurrentProcess().WorkingSet64 / 1048576.0).ToString("0.0"));
-                    report.AppendLine(
-                        "UI private bytes MB: " +
-                        (Process.GetCurrentProcess().PrivateMemorySize64 / 1048576.0)
-                            .ToString("0.0"));
-                    form.Close();
+                    using (MainForm form = new MainForm(themeSettings, false))
+                    {
+                        form.ShowInTaskbar = false;
+                        form.StartPosition = FormStartPosition.Manual;
+                        form.Location = new Point(-20000, -20000);
+                        form.Show();
+                        Application.DoEvents();
+
+                        form.SwitchTheme("dark");
+                        Application.DoEvents();
+                        bool darkPassed = Palette.IsDark && HasVisibleSidebar(form);
+                        form.SwitchTheme("light");
+                        Application.DoEvents();
+                        bool lightPassed = !Palette.IsDark && HasVisibleSidebar(form);
+                        form.SwitchTheme(originalTheme);
+                        Application.DoEvents();
+                        themeSwitchPassed =
+                            darkPassed &&
+                            lightPassed &&
+                            HasVisibleSidebar(form);
+                        report.AppendLine("Immediate theme switch test: " + themeSwitchPassed);
+
+                        report.AppendLine(
+                            "UI working set before trim MB: " +
+                            (Process.GetCurrentProcess().WorkingSet64 / 1048576.0).ToString("0.0"));
+                        NativeSystem.TrimCurrentProcessWorkingSet();
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                        NativeSystem.TrimCurrentProcessWorkingSet();
+                        report.AppendLine(
+                            "UI working set after trim MB: " +
+                            (Process.GetCurrentProcess().WorkingSet64 / 1048576.0).ToString("0.0"));
+                        report.AppendLine(
+                            "UI private bytes MB: " +
+                            (Process.GetCurrentProcess().PrivateMemorySize64 / 1048576.0)
+                                .ToString("0.0"));
+                        form.Close();
+                    }
+                }
+                finally
+                {
+                    if (settingsExisted)
+                    {
+                        File.WriteAllText(settingsPath, originalSettings, Encoding.UTF8);
+                    }
+                    else if (File.Exists(settingsPath))
+                    {
+                        File.Delete(settingsPath);
+                    }
                 }
 
                 string directory = Path.GetDirectoryName(reportPath);
@@ -4584,6 +4784,7 @@ namespace PcManagerLite
                     frameParser &&
                     autostartOn &&
                     autostartOff &&
+                    themeSwitchPassed &&
                     games.RunningGames != null;
             }
             catch (Exception ex)
@@ -4599,11 +4800,16 @@ namespace PcManagerLite
             }
         }
 
-        public static bool SaveScreenshot(string path, string page)
+        public static bool SaveScreenshot(string path, string page, string theme)
         {
             try
             {
-                using (MainForm form = new MainForm())
+                ManagerSettings screenshotSettings = ManagerSettings.Load();
+                if (!String.IsNullOrWhiteSpace(theme))
+                {
+                    screenshotSettings.Theme = theme;
+                }
+                using (MainForm form = new MainForm(screenshotSettings, false))
                 {
                     form.ShowInTaskbar = false;
                     form.StartPosition = FormStartPosition.Manual;
@@ -4648,6 +4854,21 @@ namespace PcManagerLite
                 }
                 return false;
             }
+        }
+
+        private static bool HasVisibleSidebar(Form form)
+        {
+            foreach (Control control in form.Controls)
+            {
+                if (control is Panel &&
+                    control.Dock == DockStyle.Left &&
+                    control.Visible &&
+                    control.Width >= 180)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
     }

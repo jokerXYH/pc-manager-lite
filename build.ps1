@@ -1,13 +1,13 @@
 $ErrorActionPreference = "Stop"
 
-$projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $compiler = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-$manifest = Join-Path $PSScriptRoot "app.manifest"
-$outputDirectory = Join-Path $projectRoot "outputs"
-$output = Join-Path $outputDirectory "电脑管家-Lite-2.3.exe"
+$root = $PSScriptRoot
+$outputDirectory = Join-Path $root "dist"
+$output = Join-Path $outputDirectory "pc-manager-lite.exe"
+$manifest = Join-Path $root "src\app.manifest"
 $sources = @(
-    (Join-Path $PSScriptRoot "ManagerServices.cs"),
-    (Join-Path $PSScriptRoot "ManagerUi.cs")
+    (Join-Path $root "src\ManagerServices.cs"),
+    (Join-Path $root "src\ManagerUi.cs")
 )
 
 if (-not (Test-Path -LiteralPath $compiler)) {
