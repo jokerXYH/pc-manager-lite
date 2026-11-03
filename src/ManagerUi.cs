@@ -14,8 +14,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("轻量的清理、游戏加速与网络修复工具")]
 [assembly: System.Reflection.AssemblyProduct("电脑管家 Lite")]
 [assembly: System.Reflection.AssemblyCompany("Local")]
-[assembly: System.Reflection.AssemblyVersion("2.3.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.3.1.0")]
+[assembly: System.Reflection.AssemblyVersion("2.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.4.0.0")]
 
 namespace PcManagerLite
 {
@@ -28,6 +28,7 @@ namespace PcManagerLite
             Application.SetCompatibleTextRenderingDefault(false);
             ManagerSettings startupSettings = ManagerSettings.Load();
             Palette.ApplyMode(startupSettings.Theme);
+            Palette.ApplyAccent(startupSettings.Accent);
             string forcedTheme = GetArgumentValue(args, "--theme");
             if (!String.IsNullOrWhiteSpace(forcedTheme))
             {
@@ -61,6 +62,12 @@ namespace PcManagerLite
             {
                 Environment.ExitCode = RestoreStartupFromCommandLine(
                     GetArgumentValue(args, "--report"));
+                return;
+            }
+
+            if (HasArgument(args, "--auto-clean"))
+            {
+                Environment.ExitCode = RunAutoClean();
                 return;
             }
 
@@ -197,6 +204,35 @@ namespace PcManagerLite
             }
         }
 
+        private static int RunAutoClean()
+        {
+            try
+            {
+                CleanupScanResult scan = CleanupScanner.ScanAll(null);
+                List<CleanupCategory> selected = new List<CleanupCategory>();
+                foreach (CleanupCategory category in scan.Categories)
+                {
+                    if (category.DefaultSelected)
+                    {
+                        selected.Add(category);
+                    }
+                }
+                CleanupResult result = CleanupScanner.CleanSelected(selected, null);
+                FileLogger.Write(String.Format(
+                    "计划任务自动清理: 文件 {0}, 大小 {1}, 失败 {2}, 错误 {3}",
+                    result.DeletedFiles,
+                    result.DeletedBytes,
+                    result.FailedItems,
+                    result.Error ?? "none"));
+                return result.Error == null ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("计划任务自动清理失败: " + ex);
+                return 1;
+            }
+        }
+
         private static int UpdateSelfTest(string reportPath)
         {
             try
@@ -264,10 +300,62 @@ namespace PcManagerLite
     {
         private static bool _dark;
         private static string _mode = "system";
+        private static string _accent = "blue";
+
+        public static readonly string[] AccentNames =
+        {
+            "blue",
+            "teal",
+            "purple",
+            "orange",
+            "red"
+        };
 
         public static bool IsDark
         {
             get { return _dark; }
+        }
+
+        public static string AccentName
+        {
+            get { return _accent; }
+        }
+
+        public static void ApplyAccent(string accent)
+        {
+            _accent = NormalizeAccent(accent);
+        }
+
+        public static string NormalizeAccent(string accent)
+        {
+            string value = String.IsNullOrWhiteSpace(accent)
+                ? "blue"
+                : accent.Trim().ToLowerInvariant();
+            foreach (string name in AccentNames)
+            {
+                if (String.Equals(name, value, StringComparison.Ordinal))
+                {
+                    return name;
+                }
+            }
+            return "blue";
+        }
+
+        public static string AccentDisplayName(string accent)
+        {
+            switch (NormalizeAccent(accent))
+            {
+                case "teal":
+                    return "青绿";
+                case "purple":
+                    return "紫罗兰";
+                case "orange":
+                    return "琥珀";
+                case "red":
+                    return "珊瑚";
+                default:
+                    return "经典蓝";
+            }
         }
 
         public static string Mode
@@ -302,17 +390,106 @@ namespace PcManagerLite
 
         public static Color Accent
         {
-            get { return _dark ? Color.FromArgb(75, 152, 232) : Color.FromArgb(20, 119, 232); }
+            get { return AccentVariant(0); }
         }
 
         public static Color AccentDark
         {
-            get { return _dark ? Color.FromArgb(131, 192, 255) : Color.FromArgb(10, 92, 185); }
+            get { return AccentVariant(1); }
         }
 
         public static Color AccentHover
         {
-            get { return _dark ? Color.FromArgb(62, 132, 208) : Color.FromArgb(10, 104, 207); }
+            get { return AccentVariant(2); }
+        }
+
+        public static Color AccentPreview(string accent)
+        {
+            string previous = _accent;
+            bool dark = _dark;
+            _accent = NormalizeAccent(accent);
+            _dark = false;
+            Color color = AccentVariant(0);
+            _accent = previous;
+            _dark = dark;
+            return color;
+        }
+
+        private static Color AccentVariant(int variant)
+        {
+            switch (_accent)
+            {
+                case "teal":
+                    if (_dark)
+                    {
+                        return variant == 2
+                            ? Color.FromArgb(56, 168, 160)
+                            : variant == 1
+                                ? Color.FromArgb(126, 222, 214)
+                                : Color.FromArgb(69, 191, 184);
+                    }
+                    return variant == 1
+                        ? Color.FromArgb(12, 102, 96)
+                        : variant == 2
+                            ? Color.FromArgb(18, 124, 116)
+                            : Color.FromArgb(24, 143, 134);
+                case "purple":
+                    if (_dark)
+                    {
+                        return variant == 2
+                            ? Color.FromArgb(130, 112, 226)
+                            : variant == 1
+                                ? Color.FromArgb(186, 174, 255)
+                                : Color.FromArgb(150, 135, 245);
+                    }
+                    return variant == 1
+                        ? Color.FromArgb(84, 66, 180)
+                        : variant == 2
+                            ? Color.FromArgb(92, 76, 196)
+                            : Color.FromArgb(108, 92, 214);
+                case "orange":
+                    if (_dark)
+                    {
+                        return variant == 2
+                            ? Color.FromArgb(222, 142, 52)
+                            : variant == 1
+                                ? Color.FromArgb(248, 184, 110)
+                                : Color.FromArgb(240, 160, 70);
+                    }
+                    return variant == 1
+                        ? Color.FromArgb(168, 86, 10)
+                        : variant == 2
+                            ? Color.FromArgb(190, 100, 14)
+                            : Color.FromArgb(214, 116, 22);
+                case "red":
+                    if (_dark)
+                    {
+                        return variant == 2
+                            ? Color.FromArgb(224, 100, 132)
+                            : variant == 1
+                                ? Color.FromArgb(250, 150, 166)
+                                : Color.FromArgb(240, 120, 150);
+                    }
+                    return variant == 1
+                        ? Color.FromArgb(158, 36, 64)
+                        : variant == 2
+                            ? Color.FromArgb(176, 48, 78)
+                            : Color.FromArgb(200, 60, 90);
+                default:
+                    if (_dark)
+                    {
+                        return variant == 2
+                            ? Color.FromArgb(62, 132, 208)
+                            : variant == 1
+                                ? Color.FromArgb(131, 192, 255)
+                                : Color.FromArgb(75, 152, 232);
+                    }
+                    return variant == 1
+                        ? Color.FromArgb(10, 92, 185)
+                        : variant == 2
+                            ? Color.FromArgb(10, 104, 207)
+                            : Color.FromArgb(20, 119, 232);
+            }
         }
 
         public static Color Aqua
@@ -404,7 +581,10 @@ namespace PcManagerLite
     {
         Dashboard,
         Cleanup,
+        Programs,
         Game,
+        Space,
+        SystemInfo,
         Network,
         Startup,
         Recovery,
@@ -415,7 +595,10 @@ namespace PcManagerLite
     {
         Home,
         Cleanup,
+        Programs,
         Game,
+        Disk,
+        Info,
         Network,
         Startup,
         Recovery,
@@ -431,6 +614,9 @@ namespace PcManagerLite
             new Dictionary<ManagerView, SidebarButton>();
         private DashboardPage _dashboardPage;
         private CleanupPage _cleanupPage;
+        private ProgramsPage _programsPage;
+        private SpacePage _spacePage;
+        private SystemInfoPage _systemInfoPage;
         private GamePage _gamePage;
         private NetworkPage _networkPage;
         private StartupPage _startupPage;
@@ -456,7 +642,6 @@ namespace PcManagerLite
             BackColor = Palette.Canvas;
             ForeColor = Palette.Ink;
             Font = Palette.Body;
-            AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
 
             _contentHost = new Panel();
@@ -472,6 +657,7 @@ namespace PcManagerLite
 
             Load += delegate
             {
+                FitToWorkingArea();
                 Navigate(ManagerView.Dashboard);
                 UpdateKnownSystemState();
                 if (startMinimized)
@@ -490,6 +676,11 @@ namespace PcManagerLite
                     NativeSystem.TrimCurrentProcessWorkingSet();
                 }
             };
+
+            // 必须在所有子控件创建完成后设置，否则 WinForms 只会缩放窗体本身，
+            // 导致字体按系统 DPI 放大而控件尺寸保持 96 DPI，界面出现挤压和错位。
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
         }
 
         private void BuildWorkspace()
@@ -502,6 +693,9 @@ namespace PcManagerLite
             _contentHost.Controls.Clear();
             _dashboardPage = new DashboardPage();
             _cleanupPage = new CleanupPage();
+            _programsPage = new ProgramsPage();
+            _spacePage = new SpacePage();
+            _systemInfoPage = new SystemInfoPage();
             _gamePage = new GamePage(this);
             _networkPage = new NetworkPage();
             _startupPage = new StartupPage();
@@ -510,6 +704,9 @@ namespace PcManagerLite
 
             _pages[ManagerView.Dashboard] = _dashboardPage;
             _pages[ManagerView.Cleanup] = _cleanupPage;
+            _pages[ManagerView.Programs] = _programsPage;
+            _pages[ManagerView.Space] = _spacePage;
+            _pages[ManagerView.SystemInfo] = _systemInfoPage;
             _pages[ManagerView.Game] = _gamePage;
             _pages[ManagerView.Network] = _networkPage;
             _pages[ManagerView.Startup] = _startupPage;
@@ -529,14 +726,31 @@ namespace PcManagerLite
 
         public void SwitchTheme(string theme)
         {
-            ManagerView previous = _activeView;
             _settings.Theme = String.IsNullOrWhiteSpace(theme)
                 ? "system"
                 : theme.ToLowerInvariant();
             _settings.Save();
             Palette.ApplyMode(_settings.Theme);
+            RebuildWorkspace();
+        }
+
+        public void SwitchAccent(string accent)
+        {
+            _settings.Accent = Palette.NormalizeAccent(accent);
+            _settings.Save();
+            Palette.ApplyAccent(_settings.Accent);
+            RebuildWorkspace();
+        }
+
+        private void RebuildWorkspace()
+        {
+            ManagerView previous = _activeView;
             NativeSystem.ApplyWindowTheme(Handle, Palette.IsDark);
 
+            // 主题/强调色切换会重建所有控件，新控件按 96 DPI 创建，
+            // 需要以 96 DPI 为基准重新执行一次自动缩放，否则高 DPI 下会错位。
+            Size savedClientSize = ClientSize;
+            Size savedMinimumSize = MinimumSize;
             SuspendLayout();
             _contentHost.SuspendLayout();
             try
@@ -558,15 +772,22 @@ namespace PcManagerLite
                 ForeColor = Palette.Ink;
                 Font = Palette.Body;
                 _contentHost.BackColor = Palette.Canvas;
+                _contentHost.Padding = new Padding(22, 18, 22, 18);
+                AutoScaleDimensions = new SizeF(96F, 96F);
                 BuildWorkspace();
-                Navigate(previous);
-                UpdateKnownSystemState();
             }
             finally
             {
-                _contentHost.ResumeLayout(true);
-                ResumeLayout(true);
+                _contentHost.ResumeLayout(false);
+                ResumeLayout(false);
             }
+
+            PerformAutoScale();
+            ClientSize = savedClientSize;
+            MinimumSize = savedMinimumSize;
+            Navigate(previous);
+            UpdateKnownSystemState();
+            PerformLayout();
         }
 
         public void Navigate(ManagerView view)
@@ -579,6 +800,18 @@ namespace PcManagerLite
             foreach (KeyValuePair<ManagerView, SidebarButton> pair in _navButtons)
             {
                 pair.Value.SetActive(pair.Key == view);
+            }
+            if (view == ManagerView.Programs)
+            {
+                _programsPage.EnsureLoaded();
+            }
+            if (view == ManagerView.Space)
+            {
+                _spacePage.RefreshDrives();
+            }
+            if (view == ManagerView.SystemInfo)
+            {
+                _systemInfoPage.RefreshInfo();
             }
             if (view == ManagerView.Game)
             {
@@ -613,6 +846,18 @@ namespace PcManagerLite
             {
                 Navigate(ManagerView.Cleanup);
             }
+            else if (page.Equals("programs", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigate(ManagerView.Programs);
+            }
+            else if (page.Equals("space", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigate(ManagerView.Space);
+            }
+            else if (page.Equals("system", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigate(ManagerView.SystemInfo);
+            }
             else if (page.Equals("game", StringComparison.OrdinalIgnoreCase))
             {
                 Navigate(ManagerView.Game);
@@ -636,6 +881,27 @@ namespace PcManagerLite
             else
             {
                 Navigate(ManagerView.Dashboard);
+            }
+        }
+
+        private void FitToWorkingArea()
+        {
+            Rectangle area = Screen.FromControl(this).WorkingArea;
+            Size chrome = new Size(Width - ClientSize.Width, Height - ClientSize.Height);
+            int maxWidth = Math.Max(640, area.Width - chrome.Width);
+            int maxHeight = Math.Max(480, area.Height - chrome.Height);
+            Size minimum = MinimumSize;
+            if (minimum.Width > maxWidth || minimum.Height > maxHeight)
+            {
+                MinimumSize = new Size(
+                    Math.Min(minimum.Width, maxWidth),
+                    Math.Min(minimum.Height, maxHeight));
+            }
+            int width = Math.Min(ClientSize.Width, maxWidth);
+            int height = Math.Min(ClientSize.Height, maxHeight);
+            if (width != ClientSize.Width || height != ClientSize.Height)
+            {
+                ClientSize = new Size(width, height);
             }
         }
 
@@ -697,12 +963,15 @@ namespace PcManagerLite
 
             Panel nav = new Panel();
             nav.Dock = DockStyle.Top;
-            nav.Height = 354;
+            nav.Height = 496;
             nav.Padding = new Padding(10, 6, 10, 0);
 
             AddSidebarButton(nav, ManagerView.Dashboard, "首页体检", NavIconKind.Home);
             AddSidebarButton(nav, ManagerView.Cleanup, "垃圾清理", NavIconKind.Cleanup);
+            AddSidebarButton(nav, ManagerView.Programs, "软件管理", NavIconKind.Programs);
             AddSidebarButton(nav, ManagerView.Game, "游戏加速", NavIconKind.Game);
+            AddSidebarButton(nav, ManagerView.Space, "空间分析", NavIconKind.Disk);
+            AddSidebarButton(nav, ManagerView.SystemInfo, "系统信息", NavIconKind.Info);
             AddSidebarButton(nav, ManagerView.Network, "网络修复", NavIconKind.Network);
             AddSidebarButton(nav, ManagerView.Startup, "启动项管理", NavIconKind.Startup);
             AddSidebarButton(nav, ManagerView.Recovery, "恢复中心", NavIconKind.Recovery);
@@ -923,20 +1192,38 @@ namespace PcManagerLite
             Color background = _active
                 ? Palette.Accent
                 : _hover ? Palette.SidebarHover : Palette.Sidebar;
-            using (GraphicsPath path = Ui.RoundedPath(new Rectangle(0, 2, Width - 1, Height - 5), 9))
+            using (GraphicsPath path = Ui.RoundedPath(
+                new Rectangle(
+                    0,
+                    Ui.Scale(e.Graphics, 2),
+                    Width - 1,
+                    Height - Ui.Scale(e.Graphics, 5)),
+                Ui.Scale(e.Graphics, 9)))
             using (SolidBrush brush = new SolidBrush(background))
             {
                 e.Graphics.FillPath(brush, path);
             }
 
             Color iconColor = _active ? Color.White : Palette.SidebarMuted;
-            DrawIcon(e.Graphics, new Rectangle(17, 17, 18, 18), _iconKind, iconColor);
+            DrawIcon(
+                e.Graphics,
+                new Rectangle(
+                    Ui.Scale(e.Graphics, 17),
+                    Ui.Scale(e.Graphics, 17),
+                    Ui.Scale(e.Graphics, 18),
+                    Ui.Scale(e.Graphics, 18)),
+                _iconKind,
+                iconColor);
 
             TextRenderer.DrawText(
                 e.Graphics,
                 Text,
                 _active ? Palette.BodyBold : Font,
-                new Rectangle(48, 0, Width - 55, Height),
+                new Rectangle(
+                    Ui.Scale(e.Graphics, 48),
+                    0,
+                    Width - Ui.Scale(e.Graphics, 55),
+                    Height),
                 _active ? Color.White : Palette.SidebarMuted,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
@@ -944,7 +1231,11 @@ namespace PcManagerLite
             {
                 ControlPaint.DrawFocusRectangle(
                     e.Graphics,
-                    new Rectangle(4, 5, Width - 9, Height - 11),
+                    new Rectangle(
+                        Ui.Scale(e.Graphics, 4),
+                        Ui.Scale(e.Graphics, 5),
+                        Width - Ui.Scale(e.Graphics, 9),
+                        Height - Ui.Scale(e.Graphics, 11)),
                     Color.White,
                     background);
             }
@@ -956,96 +1247,136 @@ namespace PcManagerLite
             NavIconKind kind,
             Color color)
         {
-            using (Pen pen = new Pen(color, 1.8F))
+            float scale = box.Width / 18F;
+            if (scale <= 0F)
             {
-                pen.StartCap = LineCap.Round;
-                pen.EndCap = LineCap.Round;
-                if (kind == NavIconKind.Home)
+                scale = 1F;
+            }
+            GraphicsState state = graphics.Save();
+            graphics.TranslateTransform(box.Left, box.Top);
+            graphics.ScaleTransform(scale, scale);
+            box = new Rectangle(0, 0, 18, 18);
+            try
+            {
+                using (Pen pen = new Pen(color, 1.8F))
                 {
-                    graphics.DrawLines(pen, new Point[]
+                    pen.StartCap = LineCap.Round;
+                    pen.EndCap = LineCap.Round;
+                    if (kind == NavIconKind.Home)
                     {
-                        new Point(box.Left + 2, box.Top + 8),
-                        new Point(box.Left + 9, box.Top + 2),
-                        new Point(box.Right - 2, box.Top + 8)
-                    });
-                    graphics.DrawRectangle(
-                        pen,
-                        box.Left + 4,
-                        box.Top + 8,
-                        box.Width - 8,
-                        box.Height - 9);
-                }
-                else if (kind == NavIconKind.Cleanup)
-                {
-                    graphics.DrawRectangle(
-                        pen,
-                        box.Left + 4,
-                        box.Top + 5,
-                        box.Width - 8,
-                        box.Height - 5);
-                    graphics.DrawLine(
-                        pen,
-                        box.Left + 3,
-                        box.Top + 5,
-                        box.Right - 3,
-                        box.Top + 5);
-                    graphics.DrawLine(
-                        pen,
-                        box.Left + 7,
-                        box.Top + 2,
-                        box.Right - 7,
-                        box.Top + 2);
-                    graphics.DrawLine(
-                        pen,
-                        box.Left + 8,
-                        box.Top + 9,
-                        box.Left + 8,
-                        box.Bottom - 3);
-                }
-                else if (kind == NavIconKind.Game)
-                {
-                    graphics.DrawLines(pen, new Point[]
+                        graphics.DrawLines(pen, new Point[]
+                        {
+                            new Point(box.Left + 2, box.Top + 8),
+                            new Point(box.Left + 9, box.Top + 2),
+                            new Point(box.Right - 2, box.Top + 8)
+                        });
+                        graphics.DrawRectangle(
+                            pen,
+                            box.Left + 4,
+                            box.Top + 8,
+                            box.Width - 8,
+                            box.Height - 9);
+                    }
+                    else if (kind == NavIconKind.Cleanup)
                     {
-                        new Point(box.Left + 10, box.Top + 1),
-                        new Point(box.Left + 4, box.Top + 10),
-                        new Point(box.Left + 9, box.Top + 10),
-                        new Point(box.Left + 7, box.Bottom - 1),
-                        new Point(box.Right - 3, box.Top + 7),
-                        new Point(box.Left + 12, box.Top + 7)
-                    });
+                        graphics.DrawRectangle(
+                            pen,
+                            box.Left + 4,
+                            box.Top + 5,
+                            box.Width - 8,
+                            box.Height - 5);
+                        graphics.DrawLine(
+                            pen,
+                            box.Left + 3,
+                            box.Top + 5,
+                            box.Right - 3,
+                            box.Top + 5);
+                        graphics.DrawLine(
+                            pen,
+                            box.Left + 7,
+                            box.Top + 2,
+                            box.Right - 7,
+                            box.Top + 2);
+                        graphics.DrawLine(
+                            pen,
+                            box.Left + 8,
+                            box.Top + 9,
+                            box.Left + 8,
+                            box.Bottom - 3);
+                    }
+                    else if (kind == NavIconKind.Game)
+                    {
+                        graphics.DrawLines(pen, new Point[]
+                        {
+                            new Point(box.Left + 10, box.Top + 1),
+                            new Point(box.Left + 4, box.Top + 10),
+                            new Point(box.Left + 9, box.Top + 10),
+                            new Point(box.Left + 7, box.Bottom - 1),
+                            new Point(box.Right - 3, box.Top + 7),
+                            new Point(box.Left + 12, box.Top + 7)
+                        });
+                    }
+                    else if (kind == NavIconKind.Network)
+                    {
+                        graphics.DrawEllipse(pen, box.Left + 1, box.Top + 7, 5, 5);
+                        graphics.DrawEllipse(pen, box.Right - 6, box.Top + 2, 5, 5);
+                        graphics.DrawEllipse(pen, box.Right - 6, box.Bottom - 7, 5, 5);
+                        graphics.DrawLine(pen, box.Left + 6, box.Top + 10, box.Right - 6, box.Top + 5);
+                        graphics.DrawLine(pen, box.Left + 6, box.Top + 10, box.Right - 6, box.Bottom - 5);
+                    }
+                    else if (kind == NavIconKind.Programs)
+                    {
+                        graphics.DrawRectangle(pen, box.Left + 2, box.Top + 2, 6, 6);
+                        graphics.DrawRectangle(pen, box.Left + 10, box.Top + 2, 6, 6);
+                        graphics.DrawRectangle(pen, box.Left + 2, box.Top + 10, 6, 6);
+                        graphics.DrawRectangle(pen, box.Left + 10, box.Top + 10, 6, 6);
+                    }
+                    else if (kind == NavIconKind.Disk)
+                    {
+                        graphics.DrawRectangle(pen, box.Left + 1, box.Top + 5, box.Width - 2, 9);
+                        graphics.DrawLine(
+                            pen,
+                            box.Left + 1,
+                            box.Top + 10,
+                            box.Right - 1,
+                            box.Top + 10);
+                        graphics.DrawEllipse(pen, box.Right - 5, box.Top + 7, 2, 2);
+                    }
+                    else if (kind == NavIconKind.Info)
+                    {
+                        graphics.DrawEllipse(pen, box.Left + 2, box.Top + 2, 14, 14);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 5, box.Left + 9, box.Top + 6);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 8, box.Left + 9, box.Top + 13);
+                    }
+                    else if (kind == NavIconKind.Startup)
+                    {
+                        graphics.DrawArc(pen, box.Left + 2, box.Top + 2, box.Width - 4, box.Height - 4, 40, 285);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 1, box.Left + 9, box.Top + 7);
+                        graphics.DrawLine(pen, box.Left + 13, box.Top + 5, box.Right - 4, box.Top + 5);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 9, box.Left + 9, box.Top + 13);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 13, box.Left + 13, box.Top + 13);
+                    }
+                    else if (kind == NavIconKind.Recovery)
+                    {
+                        graphics.DrawArc(pen, box.Left + 3, box.Top + 1, box.Width - 6, box.Height - 2, 205, 310);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Left + 9, box.Top + 9);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Right - 4, box.Top + 3);
+                        graphics.DrawArc(pen, box.Left + 6, box.Top + 7, 7, 7, 20, 270);
+                    }
+                    else
+                    {
+                        graphics.DrawEllipse(pen, box.Left + 4, box.Top + 4, box.Width - 8, box.Height - 8);
+                        graphics.DrawEllipse(pen, box.Left + 7, box.Top + 7, box.Width - 14, box.Height - 14);
+                        graphics.DrawLine(pen, box.Left + 9, box.Top, box.Left + 9, box.Top + 4);
+                        graphics.DrawLine(pen, box.Right - 9, box.Top, box.Right - 9, box.Top + 4);
+                        graphics.DrawLine(pen, box.Left + 9, box.Bottom - 4, box.Left + 9, box.Bottom);
+                        graphics.DrawLine(pen, box.Right - 9, box.Bottom - 4, box.Right - 9, box.Bottom);
+                    }
                 }
-                else if (kind == NavIconKind.Network)
-                {
-                    graphics.DrawEllipse(pen, box.Left + 1, box.Top + 7, 5, 5);
-                    graphics.DrawEllipse(pen, box.Right - 6, box.Top + 2, 5, 5);
-                    graphics.DrawEllipse(pen, box.Right - 6, box.Bottom - 7, 5, 5);
-                    graphics.DrawLine(pen, box.Left + 6, box.Top + 10, box.Right - 6, box.Top + 5);
-                    graphics.DrawLine(pen, box.Left + 6, box.Top + 10, box.Right - 6, box.Bottom - 5);
-                }
-                else if (kind == NavIconKind.Startup)
-                {
-                    graphics.DrawArc(pen, box.Left + 2, box.Top + 2, box.Width - 4, box.Height - 4, 40, 285);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top + 1, box.Left + 9, box.Top + 7);
-                    graphics.DrawLine(pen, box.Left + 13, box.Top + 5, box.Right - 4, box.Top + 5);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top + 9, box.Left + 9, box.Top + 13);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top + 13, box.Left + 13, box.Top + 13);
-                }
-                else if (kind == NavIconKind.Recovery)
-                {
-                    graphics.DrawArc(pen, box.Left + 3, box.Top + 1, box.Width - 6, box.Height - 2, 205, 310);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Left + 9, box.Top + 9);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top + 3, box.Right - 4, box.Top + 3);
-                    graphics.DrawArc(pen, box.Left + 6, box.Top + 7, 7, 7, 20, 270);
-                }
-                else
-                {
-                    graphics.DrawEllipse(pen, box.Left + 4, box.Top + 4, box.Width - 8, box.Height - 8);
-                    graphics.DrawEllipse(pen, box.Left + 7, box.Top + 7, box.Width - 14, box.Height - 14);
-                    graphics.DrawLine(pen, box.Left + 9, box.Top, box.Left + 9, box.Top + 4);
-                    graphics.DrawLine(pen, box.Right - 9, box.Top, box.Right - 9, box.Top + 4);
-                    graphics.DrawLine(pen, box.Left + 9, box.Bottom - 4, box.Left + 9, box.Bottom);
-                    graphics.DrawLine(pen, box.Right - 9, box.Bottom - 4, box.Right - 9, box.Bottom);
-                }
+            }
+            finally
+            {
+                graphics.Restore(state);
             }
         }
     }
@@ -1072,13 +1403,15 @@ namespace PcManagerLite
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (GraphicsPath path = Ui.RoundedPath(
                 new Rectangle(0, 0, Width - 1, Height - 1),
-                Radius))
+                Ui.Scale(e.Graphics, Radius)))
             using (SolidBrush fill = new SolidBrush(FillColor))
             {
                 e.Graphics.FillPath(fill, path);
                 if (BorderWidth > 0)
                 {
-                    using (Pen pen = new Pen(BorderColor, BorderWidth))
+                    using (Pen pen = new Pen(
+                        BorderColor,
+                        Math.Max(1F, Ui.Scale(e.Graphics, (float)BorderWidth))))
                     {
                         e.Graphics.DrawPath(pen, path);
                     }
@@ -1100,12 +1433,12 @@ namespace PcManagerLite
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (GraphicsPath path = Ui.RoundedPath(
                 new Rectangle(0, 0, Width - 1, Height - 1),
-                12))
+                Ui.Scale(e.Graphics, 12)))
             using (SolidBrush brush = new SolidBrush(
                 Palette.IsDark ? Color.FromArgb(29, 41, 52) : Color.FromArgb(233, 242, 252)))
             {
                 e.Graphics.FillPath(brush, path);
-                using (Pen pen = new Pen(Palette.Border, 1F))
+                using (Pen pen = new Pen(Palette.Border, Math.Max(1F, Ui.Scale(e.Graphics, 1F))))
                 {
                     e.Graphics.DrawPath(pen, path);
                 }
@@ -1150,17 +1483,18 @@ namespace PcManagerLite
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            int size = Math.Min(Width, Height) - 24;
+            float scale = Ui.ScaleFactor(e.Graphics);
+            int size = Math.Min(Width, Height) - Ui.Scale(e.Graphics, 24);
             Rectangle ring = new Rectangle(
                 (Width - size) / 2,
-                10,
+                Ui.Scale(e.Graphics, 10),
                 size,
                 size);
 
             Color trackColor = Palette.IsDark
                 ? Color.FromArgb(55, 255, 255, 255)
                 : Color.FromArgb(30, Palette.Accent);
-            using (Pen background = new Pen(trackColor, 10F))
+            using (Pen background = new Pen(trackColor, 10F * scale))
             {
                 background.StartCap = LineCap.Round;
                 background.EndCap = LineCap.Round;
@@ -1168,7 +1502,7 @@ namespace PcManagerLite
             }
 
             int value = _score < 0 ? 360 : (int)(360.0 * _score / 100.0);
-            using (Pen foreground = new Pen(Palette.Accent, 10F))
+            using (Pen foreground = new Pen(Palette.Accent, 10F * scale))
             {
                 foreground.StartCap = LineCap.Round;
                 foreground.EndCap = LineCap.Round;
@@ -1178,7 +1512,11 @@ namespace PcManagerLite
             string number = _score < 0 ? "—" : _score.ToString();
             using (Font numberFont = new Font("Microsoft YaHei UI", 25F, FontStyle.Bold))
             {
-                Rectangle numberArea = new Rectangle(0, ring.Top + 22, Width, 48);
+                Rectangle numberArea = new Rectangle(
+                    0,
+                    ring.Top + Ui.Scale(e.Graphics, 22),
+                    Width,
+                    Ui.Scale(e.Graphics, 48));
                 TextRenderer.DrawText(
                     e.Graphics,
                     number,
@@ -1191,7 +1529,11 @@ namespace PcManagerLite
                 e.Graphics,
                 _status,
                 Palette.BodyBold,
-                new Rectangle(0, ring.Top + 72, Width, 24),
+                new Rectangle(
+                    0,
+                    ring.Top + Ui.Scale(e.Graphics, 72),
+                    Width,
+                    Ui.Scale(e.Graphics, 24)),
                 Palette.Ink,
                 TextFormatFlags.HorizontalCenter);
         }
@@ -1199,6 +1541,33 @@ namespace PcManagerLite
 
     internal static class Ui
     {
+        public static int Scale(Graphics graphics, int value)
+        {
+            return (int)Math.Round(value * ScaleFactor(graphics));
+        }
+
+        public static float Scale(Graphics graphics, float value)
+        {
+            return value * ScaleFactor(graphics);
+        }
+
+        public static float ScaleFactor(Graphics graphics)
+        {
+            return graphics == null ? 1F : graphics.DpiX / 96F;
+        }
+
+        public static float ScaleFactor(Control control)
+        {
+            if (control == null)
+            {
+                return 1F;
+            }
+            using (Graphics graphics = control.CreateGraphics())
+            {
+                return ScaleFactor(graphics);
+            }
+        }
+
         public static GraphicsPath RoundedPath(Rectangle rectangle, int radius)
         {
             int diameter = Math.Max(1, radius * 2);
@@ -1271,6 +1640,43 @@ namespace PcManagerLite
             return button;
         }
 
+        public static Label BuildStatCard(
+            TableLayoutPanel parent,
+            int column,
+            string title,
+            string value,
+            Color accent)
+        {
+            RoundedPanel card = new RoundedPanel();
+            card.Dock = DockStyle.Fill;
+            card.Margin = new Padding(
+                column == 0 ? 0 : 7,
+                0,
+                column == parent.ColumnCount - 1 ? 0 : 7,
+                0);
+            card.Padding = new Padding(16, 10, 16, 10);
+
+            Label valueLabel = Label(
+                value,
+                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                accent,
+                ContentAlignment.MiddleLeft);
+            valueLabel.Dock = DockStyle.Fill;
+            card.Controls.Add(valueLabel);
+
+            Label titleLabel = Label(
+                title,
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.TopLeft);
+            titleLabel.Dock = DockStyle.Top;
+            titleLabel.Height = 22;
+            card.Controls.Add(titleLabel);
+
+            parent.Controls.Add(card, column, 0);
+            return valueLabel;
+        }
+
         public static Label Label(
             string text,
             Font font,
@@ -1298,6 +1704,7 @@ namespace PcManagerLite
             panel.Margin = new Padding(0);
             panel.ColumnCount = 2;
             panel.RowCount = 1;
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150F));
 
@@ -1434,6 +1841,7 @@ namespace PcManagerLite
             heroLayout.BackColor = Color.Transparent;
             heroLayout.ColumnCount = 2;
             heroLayout.RowCount = 1;
+            heroLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             heroLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             heroLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180F));
 
@@ -1501,6 +1909,7 @@ namespace PcManagerLite
             quickCards.Margin = new Padding(0, 0, 0, 14);
             quickCards.ColumnCount = 3;
             quickCards.RowCount = 1;
+            quickCards.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             for (int i = 0; i < 3; i++)
             {
                 quickCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
@@ -1784,8 +2193,8 @@ namespace PcManagerLite
             card.Controls.Add(button);
             card.Resize += delegate
             {
-                button.Left = card.ClientSize.Width - button.Width - 14;
-                button.Top = card.ClientSize.Height - button.Height - 12;
+                button.Left = card.ClientSize.Width - button.Width - card.Padding.Right;
+                button.Top = card.ClientSize.Height - button.Height - card.Padding.Bottom;
             };
             parent.Controls.Add(card, column, 0);
             return metricLabel;
@@ -2238,6 +2647,7 @@ namespace PcManagerLite
             stats.Margin = new Padding(0, 0, 0, 12);
             stats.ColumnCount = 3;
             stats.RowCount = 1;
+            stats.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             for (int i = 0; i < 3; i++)
             {
                 stats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
@@ -2343,8 +2753,11 @@ namespace PcManagerLite
             frameCard.Controls.Add(_frameResult);
             frameCard.Resize += delegate
             {
-                _gameCombo.Width = Math.Max(180, Math.Min(360, frameCard.ClientSize.Width - 510));
-                _frameResult.Width = Math.Max(180, frameCard.ClientSize.Width - _frameResult.Left - 16);
+                LayoutFrameCard(frameCard, _gameCombo, _frameResult);
+            };
+            frameCard.HandleCreated += delegate
+            {
+                LayoutFrameCard(frameCard, _gameCombo, _frameResult);
             };
             root.Controls.Add(frameCard, 0, 2);
 
@@ -2472,6 +2885,22 @@ namespace PcManagerLite
             };
 
             Scan();
+        }
+
+        private static void LayoutFrameCard(
+            Control frameCard,
+            Control gameCombo,
+            Control frameResult)
+        {
+            float scale = Ui.ScaleFactor(frameCard);
+            gameCombo.Width = Math.Max(
+                (int)Math.Round(180 * scale),
+                Math.Min(
+                    (int)Math.Round(360 * scale),
+                    frameCard.ClientSize.Width - (int)Math.Round(510 * scale)));
+            frameResult.Width = Math.Max(
+                (int)Math.Round(180 * scale),
+                frameCard.ClientSize.Width - frameResult.Left - (int)Math.Round(16 * scale));
         }
 
         public void RefreshState()
@@ -2868,6 +3297,14 @@ namespace PcManagerLite
             card.Margin = new Padding(column == 0 ? 0 : 7, 0, column == 2 ? 0 : 7, 0);
             card.Padding = new Padding(16, 10, 16, 10);
 
+            Label valueLabel = Ui.Label(
+                value,
+                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                accent,
+                ContentAlignment.MiddleLeft);
+            valueLabel.Dock = DockStyle.Fill;
+            card.Controls.Add(valueLabel);
+
             Label titleLabel = Ui.Label(
                 title,
                 Palette.Small,
@@ -2876,14 +3313,6 @@ namespace PcManagerLite
             titleLabel.Dock = DockStyle.Top;
             titleLabel.Height = 22;
             card.Controls.Add(titleLabel);
-
-            Label valueLabel = Ui.Label(
-                value,
-                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
-                accent,
-                ContentAlignment.MiddleLeft);
-            valueLabel.Dock = DockStyle.Fill;
-            card.Controls.Add(valueLabel);
             parent.Controls.Add(card, column, 0);
             return valueLabel;
         }
@@ -3307,6 +3736,8 @@ namespace PcManagerLite
         private readonly Button _lightThemeButton;
         private readonly Button _darkThemeButton;
         private readonly Label _preferenceStatus;
+        private readonly CheckBox _scheduledCleanup;
+        private readonly ToolTip _tips = new ToolTip();
         private bool _busy;
         private bool _loading;
         private UpdateCheckResult _lastCheck;
@@ -3341,8 +3772,9 @@ namespace PcManagerLite
             body.Margin = new Padding(0, 0, 0, 12);
             body.ColumnCount = 2;
             body.RowCount = 1;
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56F));
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44F));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             root.Controls.Add(body, 0, 1);
 
             RoundedPanel updateCard = new RoundedPanel();
@@ -3457,10 +3889,12 @@ namespace PcManagerLite
             TableLayoutPanel preferenceLayout = new TableLayoutPanel();
             preferenceLayout.Dock = DockStyle.Fill;
             preferenceLayout.ColumnCount = 2;
-            preferenceLayout.RowCount = 5;
+            preferenceLayout.RowCount = 7;
             preferenceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             preferenceLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 350F));
             preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             preferenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
@@ -3529,8 +3963,10 @@ namespace PcManagerLite
             TableLayoutPanel themeRow = new TableLayoutPanel();
             themeRow.Dock = DockStyle.Fill;
             themeRow.ColumnCount = 2;
+            themeRow.RowCount = 1;
+            themeRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 286F));
+            themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250F));
 
             Label themeLabel = Ui.Label(
                 "界面主题（点击立即切换）",
@@ -3581,6 +4017,95 @@ namespace PcManagerLite
             preferenceLayout.Controls.Add(themeRow, 0, 3);
             preferenceLayout.SetColumnSpan(themeRow, 2);
 
+            TableLayoutPanel accentRow = new TableLayoutPanel();
+            accentRow.Dock = DockStyle.Fill;
+            accentRow.ColumnCount = 2;
+            accentRow.RowCount = 1;
+            accentRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            accentRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            accentRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250F));
+
+            Label accentLabel = Ui.Label(
+                "强调色（按钮与高亮颜色）",
+                Palette.Body,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            accentLabel.Dock = DockStyle.Fill;
+
+            FlowLayoutPanel accentButtons = new FlowLayoutPanel();
+            accentButtons.Dock = DockStyle.Fill;
+            accentButtons.FlowDirection = FlowDirection.LeftToRight;
+            accentButtons.WrapContents = false;
+            accentButtons.Margin = new Padding(0);
+
+            foreach (string accentName in Palette.AccentNames)
+            {
+                bool selected = String.Equals(
+                    accentName,
+                    Palette.AccentName,
+                    StringComparison.Ordinal);
+                Button accentButton = new Button();
+                accentButton.Width = 34;
+                accentButton.Height = 26;
+                accentButton.Margin = new Padding(0, 5, 8, 5);
+                accentButton.FlatStyle = FlatStyle.Flat;
+                accentButton.FlatAppearance.BorderSize = selected ? 2 : 1;
+                accentButton.FlatAppearance.BorderColor = selected
+                    ? Palette.Ink
+                    : Palette.Border;
+                accentButton.BackColor = Palette.AccentPreview(accentName);
+                accentButton.Cursor = Cursors.Hand;
+                accentButton.Tag = accentName;
+                accentButton.Click += delegate(object sender, EventArgs e)
+                {
+                    Button button = sender as Button;
+                    if (button == null)
+                    {
+                        return;
+                    }
+                    _owner.SwitchAccent(Convert.ToString(button.Tag));
+                };
+                _tips.SetToolTip(
+                    accentButton,
+                    Palette.AccentDisplayName(accentName));
+                accentButtons.Controls.Add(accentButton);
+            }
+            accentRow.Controls.Add(accentLabel, 0, 0);
+            accentRow.Controls.Add(accentButtons, 1, 0);
+            preferenceLayout.Controls.Add(accentRow, 0, 4);
+            preferenceLayout.SetColumnSpan(accentRow, 2);
+
+            _scheduledCleanup = CreateSettingCheck(
+                "每周日 12:00 自动清理临时文件（登录后运行）",
+                false);
+            _scheduledCleanup.CheckedChanged += delegate
+            {
+                if (_loading)
+                {
+                    return;
+                }
+                string message;
+                bool success;
+                if (_scheduledCleanup.Checked)
+                {
+                    success = ScheduledCleanupService.Enable(out message);
+                }
+                else
+                {
+                    success = ScheduledCleanupService.Disable(out message);
+                }
+                if (!success)
+                {
+                    _loading = true;
+                    _scheduledCleanup.Checked = ScheduledCleanupService.IsEnabled();
+                    _loading = false;
+                }
+                _preferenceStatus.Text = message;
+                _preferenceStatus.ForeColor = success ? Palette.Success : Palette.Danger;
+            };
+            preferenceLayout.Controls.Add(_scheduledCleanup, 0, 5);
+            preferenceLayout.SetColumnSpan(_scheduledCleanup, 2);
+
             _preferenceStatus = Ui.Label(
                 "",
                 Palette.Small,
@@ -3588,7 +4113,7 @@ namespace PcManagerLite
                 ContentAlignment.TopLeft);
             _preferenceStatus.Dock = DockStyle.Fill;
             _preferenceStatus.Margin = new Padding(0, 14, 0, 0);
-            preferenceLayout.Controls.Add(_preferenceStatus, 0, 4);
+            preferenceLayout.Controls.Add(_preferenceStatus, 0, 6);
             preferenceLayout.SetColumnSpan(_preferenceStatus, 2);
             preferences.Controls.Add(preferenceLayout);
             body.Controls.Add(preferences, 1, 0);
@@ -3654,6 +4179,14 @@ namespace PcManagerLite
             _loading = true;
             _checkOnStart.Checked = _settings.CheckUpdatesOnStart;
             _startWithWindows.Checked = AppStartupService.IsEnabled();
+            try
+            {
+                _scheduledCleanup.Checked = ScheduledCleanupService.IsEnabled();
+            }
+            catch
+            {
+                _scheduledCleanup.Checked = false;
+            }
             _loading = false;
             SetThemeButtonState(_systemThemeButton, _settings.Theme == "system");
             SetThemeButtonState(_lightThemeButton, _settings.Theme == "light");
@@ -3848,6 +4381,7 @@ namespace PcManagerLite
         private readonly Button _scanButton;
         private readonly Button _disableButton;
         private readonly Button _restoreButton;
+        private readonly TextBox _search;
         private List<StartupItem> _items;
         private bool _busy;
 
@@ -3858,10 +4392,11 @@ namespace PcManagerLite
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
-            root.RowCount = 4;
+            root.RowCount = 5;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 106F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
             Controls.Add(root);
@@ -3880,6 +4415,7 @@ namespace PcManagerLite
             stats.Margin = new Padding(0, 0, 0, 12);
             stats.ColumnCount = 3;
             stats.RowCount = 1;
+            stats.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             for (int i = 0; i < 3; i++)
             {
                 stats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
@@ -3888,6 +4424,45 @@ namespace PcManagerLite
             _disableableValue = AddStatCard(stats, 1, "可安全配置", "正在扫描", Palette.Aqua);
             _selfValue = AddStatCard(stats, 2, "本工具自启动", "未注册", Palette.Success);
             root.Controls.Add(stats, 0, 1);
+
+            Panel toolbar = new Panel();
+            toolbar.Dock = DockStyle.Fill;
+            toolbar.Margin = new Padding(0, 0, 0, 10);
+            Label searchLabel = Ui.Label(
+                "搜索",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            searchLabel.AutoSize = true;
+            searchLabel.Location = new Point(0, 15);
+            toolbar.Controls.Add(searchLabel);
+
+            _search = new TextBox();
+            _search.AutoSize = false;
+            _search.BorderStyle = BorderStyle.FixedSingle;
+            _search.Font = Palette.Body;
+            _search.BackColor = Palette.Card;
+            _search.ForeColor = Palette.Ink;
+            _search.Location = new Point(42, 11);
+            _search.Height = 30;
+            _search.Width = 330;
+            _search.TextChanged += delegate { ApplySearchFilter(true); };
+            _search.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(_search.Handle, Palette.IsDark, false);
+                NativeSystem.SetCueBanner(_search.Handle, "输入名称、来源或命令关键字…");
+            };
+            toolbar.Controls.Add(_search);
+
+            Label filterHint = Ui.Label(
+                "按名称、来源或启动命令过滤，勾选状态会保留",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            filterHint.AutoSize = true;
+            filterHint.Location = new Point(390, 15);
+            toolbar.Controls.Add(filterHint);
+            root.Controls.Add(toolbar, 0, 2);
 
             RoundedPanel gridPanel = new RoundedPanel();
             gridPanel.Dock = DockStyle.Fill;
@@ -3946,11 +4521,11 @@ namespace PcManagerLite
             _grid.Columns.Add(command);
             _grid.Columns.Add(note);
             gridPanel.Controls.Add(_grid);
-            root.Controls.Add(gridPanel, 0, 2);
+            root.Controls.Add(gridPanel, 0, 3);
 
             Panel actions = new Panel();
             actions.Dock = DockStyle.Fill;
-            root.Controls.Add(actions, 0, 3);
+            root.Controls.Add(actions, 0, 4);
 
             _status = Ui.Label(
                 "尚未扫描启动项",
@@ -4053,6 +4628,7 @@ namespace PcManagerLite
                     : "扫描完成；勾选后点击“禁用选中启动”会立即执行。";
                 _status.ForeColor = Palette.Muted;
                 _restoreButton.Enabled = disabled > 0;
+                ApplySearchFilter(false);
             }
             catch (Exception ex)
             {
@@ -4064,6 +4640,48 @@ namespace PcManagerLite
             {
                 Cursor = Cursors.Default;
             }
+        }
+
+        private void ApplySearchFilter(bool updateStatus)
+        {
+            string keyword = _search == null ? String.Empty : _search.Text.Trim();
+            int shown = 0;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                StartupItem item = row.Tag as StartupItem;
+                if (item == null)
+                {
+                    continue;
+                }
+                bool visible = keyword.Length == 0 ||
+                    ContainsText(item.Name, keyword) ||
+                    ContainsText(item.SourceLabel, keyword) ||
+                    ContainsText(item.Command, keyword);
+                row.Visible = visible;
+                if (visible)
+                {
+                    shown++;
+                }
+            }
+            if (updateStatus && _items != null && !_busy)
+            {
+                _status.Text = keyword.Length == 0
+                    ? String.Format(
+                        "共 {0} 个启动项；勾选后点击“禁用选中启动”会立即执行。",
+                        _items.Count)
+                    : String.Format(
+                        "共 {0} 个启动项，匹配“{1}”的 {2} 个。",
+                        _items.Count,
+                        keyword,
+                        shown);
+                _status.ForeColor = Palette.Muted;
+            }
+        }
+
+        private static bool ContainsText(string text, string keyword)
+        {
+            return !String.IsNullOrWhiteSpace(text) &&
+                text.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) >= 0;
         }
 
         private void DisableSelected()
@@ -4180,6 +4798,14 @@ namespace PcManagerLite
             card.Margin = new Padding(column == 0 ? 0 : 7, 0, column == 2 ? 0 : 7, 0);
             card.Padding = new Padding(16, 10, 16, 10);
 
+            Label valueLabel = Ui.Label(
+                value,
+                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                accent,
+                ContentAlignment.MiddleLeft);
+            valueLabel.Dock = DockStyle.Fill;
+            card.Controls.Add(valueLabel);
+
             Label titleLabel = Ui.Label(
                 title,
                 Palette.Small,
@@ -4188,14 +4814,6 @@ namespace PcManagerLite
             titleLabel.Dock = DockStyle.Top;
             titleLabel.Height = 22;
             card.Controls.Add(titleLabel);
-
-            Label valueLabel = Ui.Label(
-                value,
-                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
-                accent,
-                ContentAlignment.MiddleLeft);
-            valueLabel.Dock = DockStyle.Fill;
-            card.Controls.Add(valueLabel);
             parent.Controls.Add(card, column, 0);
             return valueLabel;
         }
@@ -4243,6 +4861,7 @@ namespace PcManagerLite
             cards.Margin = new Padding(0, 0, 0, 12);
             cards.ColumnCount = 2;
             cards.RowCount = 1;
+            cards.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
 
@@ -4540,6 +5159,1204 @@ namespace PcManagerLite
         }
     }
 
+    internal sealed class ProgramsPage : UserControl
+    {
+        private readonly DataGridView _grid;
+        private readonly TextBox _search;
+        private readonly Label _status;
+        private readonly Label _totalValue;
+        private readonly Label _uninstallableValue;
+        private readonly Label _sizeValue;
+        private readonly Button _uninstallButton;
+        private readonly Button _openButton;
+        private List<InstalledProgram> _programs = new List<InstalledProgram>();
+        private bool _loading;
+        private bool _loaded;
+
+        public ProgramsPage()
+        {
+            BackColor = Palette.Canvas;
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 5;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 106F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            Controls.Add(root);
+
+            root.Controls.Add(
+                Ui.BuildPageHeader(
+                    "软件管理",
+                    "查看已安装程序、打开安装目录或调用程序自带的卸载器",
+                    "刷新列表",
+                    delegate { ScanPrograms(); }),
+                0,
+                0);
+
+            TableLayoutPanel stats = new TableLayoutPanel();
+            stats.Dock = DockStyle.Fill;
+            stats.Margin = new Padding(0, 0, 0, 12);
+            stats.ColumnCount = 3;
+            stats.RowCount = 1;
+            stats.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            for (int i = 0; i < 3; i++)
+            {
+                stats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+            }
+            _totalValue = Ui.BuildStatCard(stats, 0, "已安装程序", "正在读取", Palette.Accent);
+            _uninstallableValue = Ui.BuildStatCard(stats, 1, "提供卸载器", "正在读取", Palette.Aqua);
+            _sizeValue = Ui.BuildStatCard(stats, 2, "登记占用", "正在读取", Palette.Warning);
+            root.Controls.Add(stats, 0, 1);
+
+            Panel toolbar = new Panel();
+            toolbar.Dock = DockStyle.Fill;
+            toolbar.Margin = new Padding(0, 0, 0, 10);
+            Label searchLabel = Ui.Label(
+                "搜索",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            searchLabel.AutoSize = true;
+            searchLabel.Location = new Point(0, 15);
+            toolbar.Controls.Add(searchLabel);
+
+            _search = new TextBox();
+            _search.AutoSize = false;
+            _search.BorderStyle = BorderStyle.FixedSingle;
+            _search.Font = Palette.Body;
+            _search.BackColor = Palette.Card;
+            _search.ForeColor = Palette.Ink;
+            _search.Location = new Point(42, 11);
+            _search.Height = 30;
+            _search.Width = 330;
+            _search.TextChanged += delegate { ApplyFilter(); };
+            _search.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(_search.Handle, Palette.IsDark, false);
+                NativeSystem.SetCueBanner(_search.Handle, "输入程序名称或发布者…");
+            };
+            toolbar.Controls.Add(_search);
+            root.Controls.Add(toolbar, 0, 2);
+
+            RoundedPanel gridCard = new RoundedPanel();
+            gridCard.Dock = DockStyle.Fill;
+            gridCard.Margin = new Padding(0, 0, 0, 12);
+            gridCard.Padding = new Padding(12);
+            _grid = new DataGridView();
+            _grid.Dock = DockStyle.Fill;
+            Ui.StyleGrid(_grid);
+            _grid.ReadOnly = true;
+            _grid.SelectionChanged += delegate { UpdateButtons(); };
+            _grid.CellDoubleClick += delegate { OpenLocation(); };
+
+            DataGridViewTextBoxColumn name = new DataGridViewTextBoxColumn();
+            name.Name = "Name";
+            name.HeaderText = "程序名称";
+            name.FillWeight = 32F;
+            name.MinimumWidth = 190;
+
+            DataGridViewTextBoxColumn publisher = new DataGridViewTextBoxColumn();
+            publisher.Name = "Publisher";
+            publisher.HeaderText = "发布者";
+            publisher.FillWeight = 22F;
+            publisher.MinimumWidth = 130;
+
+            DataGridViewTextBoxColumn version = new DataGridViewTextBoxColumn();
+            version.Name = "Version";
+            version.HeaderText = "版本";
+            version.FillWeight = 12F;
+            version.MinimumWidth = 70;
+
+            DataGridViewTextBoxColumn size = new DataGridViewTextBoxColumn();
+            size.Name = "Size";
+            size.HeaderText = "大小";
+            size.FillWeight = 12F;
+            size.MinimumWidth = 74;
+
+            DataGridViewTextBoxColumn installed = new DataGridViewTextBoxColumn();
+            installed.Name = "Installed";
+            installed.HeaderText = "安装日期";
+            installed.FillWeight = 14F;
+            installed.MinimumWidth = 92;
+
+            _grid.Columns.Add(name);
+            _grid.Columns.Add(publisher);
+            _grid.Columns.Add(version);
+            _grid.Columns.Add(size);
+            _grid.Columns.Add(installed);
+            gridCard.Controls.Add(_grid);
+            root.Controls.Add(gridCard, 0, 3);
+
+            Panel actions = new Panel();
+            actions.Dock = DockStyle.Fill;
+            root.Controls.Add(actions, 0, 4);
+
+            _status = Ui.Label(
+                "正在读取已安装程序…",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _status.AutoSize = true;
+            _status.Location = new Point(2, 20);
+            actions.Controls.Add(_status);
+
+            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Right;
+            buttons.Width = 300;
+            buttons.FlowDirection = FlowDirection.RightToLeft;
+            buttons.WrapContents = false;
+
+            _uninstallButton = Ui.CreateButton("卸载选中", true);
+            _uninstallButton.Width = 108;
+            _uninstallButton.Enabled = false;
+            _uninstallButton.Click += delegate { UninstallSelected(); };
+            _openButton = Ui.CreateButton("打开安装目录", false);
+            _openButton.Width = 124;
+            _openButton.Enabled = false;
+            _openButton.Click += delegate { OpenLocation(); };
+            buttons.Controls.Add(_uninstallButton);
+            buttons.Controls.Add(_openButton);
+            actions.Controls.Add(buttons);
+            actions.Resize += delegate
+            {
+                buttons.Left = actions.ClientSize.Width - buttons.Width;
+            };
+        }
+
+        public void EnsureLoaded()
+        {
+            if (!_loaded && !_loading)
+            {
+                ScanPrograms();
+            }
+        }
+
+        private void ScanPrograms()
+        {
+            if (_loading)
+            {
+                return;
+            }
+            _loading = true;
+            _uninstallButton.Enabled = false;
+            _openButton.Enabled = false;
+            _status.Text = "正在读取注册表中的已安装程序…";
+            _status.ForeColor = Palette.Muted;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                List<InstalledProgram> items = InstalledProgramService.Scan();
+                SafeBeginInvoke(delegate
+                {
+                    _loading = false;
+                    _loaded = true;
+                    _programs = items;
+                    UpdateSummary();
+                    ApplyFilter();
+                });
+            });
+        }
+
+        private void UpdateSummary()
+        {
+            int uninstallable = 0;
+            long size = 0;
+            foreach (InstalledProgram program in _programs)
+            {
+                if (program.CanUninstall)
+                {
+                    uninstallable++;
+                }
+                if (program.SizeBytes > 0)
+                {
+                    size += program.SizeBytes;
+                }
+            }
+            _totalValue.Text = _programs.Count + " 个";
+            _uninstallableValue.Text = uninstallable + " 个";
+            _sizeValue.Text = size > 0 ? Format.Bytes(size) : "未登记";
+        }
+
+        private void ApplyFilter()
+        {
+            string keyword = _search == null
+                ? String.Empty
+                : _search.Text.Trim();
+            _grid.Rows.Clear();
+            int shown = 0;
+            foreach (InstalledProgram program in _programs)
+            {
+                if (keyword.Length > 0 &&
+                    program.Name.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) < 0 &&
+                    (program.Publisher == null ||
+                     program.Publisher.IndexOf(
+                         keyword,
+                         StringComparison.CurrentCultureIgnoreCase) < 0))
+                {
+                    continue;
+                }
+                int index = _grid.Rows.Add();
+                DataGridViewRow row = _grid.Rows[index];
+                row.Tag = program;
+                row.Cells["Name"].Value = program.Name;
+                row.Cells["Publisher"].Value = String.IsNullOrWhiteSpace(program.Publisher)
+                    ? "—"
+                    : program.Publisher;
+                row.Cells["Version"].Value = String.IsNullOrWhiteSpace(program.Version)
+                    ? "—"
+                    : program.Version;
+                row.Cells["Size"].Value = program.SizeBytes > 0
+                    ? Format.Bytes(program.SizeBytes)
+                    : "—";
+                row.Cells["Installed"].Value = String.IsNullOrWhiteSpace(program.InstallDate)
+                    ? "—"
+                    : program.InstallDate;
+                row.Cells["Name"].ToolTipText = program.Name;
+                shown++;
+            }
+            if (_loaded)
+            {
+                _status.Text = String.Format(
+                    "共 {0} 个程序，当前显示 {1} 个；卸载会调用程序自带卸载器。",
+                    _programs.Count,
+                    shown);
+                _status.ForeColor = Palette.Muted;
+            }
+            UpdateButtons();
+        }
+
+        private void UpdateButtons()
+        {
+            InstalledProgram program = SelectedProgram();
+            if (_uninstallButton != null)
+            {
+                _uninstallButton.Enabled = !_loading &&
+                    program != null &&
+                    program.CanUninstall;
+            }
+            if (_openButton != null)
+            {
+                _openButton.Enabled = program != null &&
+                    !String.IsNullOrWhiteSpace(program.InstallLocation) &&
+                    Directory.Exists(program.InstallLocation);
+            }
+        }
+
+        private InstalledProgram SelectedProgram()
+        {
+            if (_grid == null || _grid.SelectedRows.Count == 0)
+            {
+                return null;
+            }
+            return _grid.SelectedRows[0].Tag as InstalledProgram;
+        }
+
+        private void UninstallSelected()
+        {
+            InstalledProgram program = SelectedProgram();
+            if (program == null)
+            {
+                return;
+            }
+            DialogResult confirm = MessageBox.Show(
+                this,
+                "确定要卸载「" + program.Name + "」吗？\n将启动该程序自带的卸载程序，按它自己的流程完成卸载。",
+                "确认卸载",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (confirm != DialogResult.Yes)
+            {
+                return;
+            }
+            string error;
+            if (InstalledProgramService.LaunchUninstall(program, out error))
+            {
+                _status.Text = "已启动卸载程序，完成后点击「刷新列表」查看结果。";
+                _status.ForeColor = Palette.Success;
+            }
+            else
+            {
+                _status.Text = "无法启动卸载程序：" + error;
+                _status.ForeColor = Palette.Danger;
+            }
+        }
+
+        private void OpenLocation()
+        {
+            InstalledProgram program = SelectedProgram();
+            if (program == null)
+            {
+                return;
+            }
+            string error;
+            if (!InstalledProgramService.OpenInstallLocation(program, out error))
+            {
+                _status.Text = error;
+                _status.ForeColor = Palette.Warning;
+            }
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal sealed class UsageBar : Control
+    {
+        public double Percent;
+        public Color FillColor = Palette.Accent;
+        public Color TrackColor = Palette.SoftBlue;
+
+        public UsageBar()
+        {
+            SetStyle(
+                ControlStyles.UserPaint |
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.SupportsTransparentBackColor,
+                true);
+            BackColor = Color.Transparent;
+            Height = 8;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            int barHeight = Math.Max(4, Ui.Scale(e.Graphics, Math.Min(10, Height)));
+            int top = (Height - barHeight) / 2;
+            int radius = barHeight / 2;
+            Rectangle track = new Rectangle(0, top, Math.Max(1, Width - 1), barHeight);
+            using (GraphicsPath trackPath = Ui.RoundedPath(track, radius))
+            using (SolidBrush trackBrush = new SolidBrush(TrackColor))
+            {
+                e.Graphics.FillPath(trackBrush, trackPath);
+            }
+            double percent = Math.Max(0, Math.Min(100, Percent));
+            if (percent <= 0)
+            {
+                return;
+            }
+            int fillWidth = (int)Math.Round(track.Width * percent / 100.0);
+            if (fillWidth < barHeight)
+            {
+                fillWidth = barHeight;
+            }
+            Rectangle fill = new Rectangle(track.Left, track.Top, fillWidth, barHeight);
+            using (GraphicsPath fillPath = Ui.RoundedPath(fill, radius))
+            using (SolidBrush fillBrush = new SolidBrush(FillColor))
+            {
+                e.Graphics.FillPath(fillBrush, fillPath);
+            }
+        }
+    }
+
+    internal sealed class SpacePage : UserControl
+    {
+        private const int MaxCards = 4;
+
+        private readonly TableLayoutPanel _driveCards;
+        private readonly RoundedPanel[] _cards = new RoundedPanel[MaxCards];
+        private readonly Label[] _driveNames = new Label[MaxCards];
+        private readonly Label[] _driveValues = new Label[MaxCards];
+        private readonly UsageBar[] _driveBars = new UsageBar[MaxCards];
+        private readonly ComboBox _driveCombo;
+        private readonly ComboBox _sizeCombo;
+        private readonly DataGridView _grid;
+        private readonly Label _status;
+        private readonly Button _scanButton;
+        private readonly Button _stopButton;
+        private readonly Button _openButton;
+        private volatile bool _cancel;
+        private bool _scanning;
+        private int _lastDriveCount;
+
+        public SpacePage()
+        {
+            BackColor = Palette.Canvas;
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 5;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 104F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 60F));
+            Controls.Add(root);
+
+            root.Controls.Add(
+                Ui.BuildPageHeader(
+                    "空间分析",
+                    "查看磁盘占用，扫描大文件；只读操作，不会删除任何内容",
+                    null,
+                    null),
+                0,
+                0);
+
+            _driveCards = new TableLayoutPanel();
+            _driveCards.Dock = DockStyle.Fill;
+            _driveCards.Margin = new Padding(0, 0, 0, 10);
+            _driveCards.ColumnCount = MaxCards;
+            _driveCards.RowCount = 1;
+            _driveCards.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            for (int i = 0; i < MaxCards; i++)
+            {
+                _driveCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
+                RoundedPanel card = new RoundedPanel();
+                card.Dock = DockStyle.Fill;
+                card.Margin = new Padding(i == 0 ? 0 : 5, 0, i == MaxCards - 1 ? 0 : 5, 0);
+                card.Padding = new Padding(14, 10, 14, 10);
+
+                Label nameLabel = Ui.Label(
+                    "磁盘",
+                    Palette.Small,
+                    Palette.Muted,
+                    ContentAlignment.MiddleLeft);
+                nameLabel.AutoSize = true;
+                nameLabel.Location = new Point(14, 10);
+                card.Controls.Add(nameLabel);
+
+                Label valueLabel = Ui.Label(
+                    "读取中",
+                    Palette.BodyBold,
+                    Palette.Ink,
+                    ContentAlignment.MiddleLeft);
+                valueLabel.AutoSize = true;
+                valueLabel.Location = new Point(14, 32);
+                card.Controls.Add(valueLabel);
+
+                UsageBar bar = new UsageBar();
+                bar.Location = new Point(14, 62);
+                bar.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
+                bar.Width = 140;
+                card.Controls.Add(bar);
+                card.Resize += delegate
+                {
+                    bar.Width = Math.Max(20, card.ClientSize.Width - 28);
+                };
+
+                _cards[i] = card;
+                _driveNames[i] = nameLabel;
+                _driveValues[i] = valueLabel;
+                _driveBars[i] = bar;
+                _driveCards.Controls.Add(card, i, 0);
+            }
+            root.Controls.Add(_driveCards, 0, 1);
+
+            Panel toolbar = new Panel();
+            toolbar.Dock = DockStyle.Fill;
+            toolbar.Margin = new Padding(0, 0, 0, 10);
+
+            Label driveLabel = Ui.Label(
+                "扫描位置",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            driveLabel.AutoSize = true;
+            driveLabel.Location = new Point(0, 15);
+            toolbar.Controls.Add(driveLabel);
+
+            _driveCombo = CreateToolbarCombo();
+            _driveCombo.Location = new Point(68, 10);
+            _driveCombo.Width = 190;
+            toolbar.Controls.Add(_driveCombo);
+
+            Label sizeLabel = Ui.Label(
+                "大于",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            sizeLabel.AutoSize = true;
+            sizeLabel.Location = new Point(276, 15);
+            toolbar.Controls.Add(sizeLabel);
+
+            _sizeCombo = CreateToolbarCombo();
+            _sizeCombo.Location = new Point(314, 10);
+            _sizeCombo.Width = 120;
+            _sizeCombo.Items.AddRange(new object[]
+            {
+                "100 MB",
+                "500 MB",
+                "1 GB",
+                "5 GB"
+            });
+            _sizeCombo.SelectedIndex = 2;
+            toolbar.Controls.Add(_sizeCombo);
+
+            _scanButton = Ui.CreateButton("开始扫描", true);
+            _scanButton.Width = 108;
+            _scanButton.Location = new Point(450, 10);
+            _scanButton.Click += delegate { StartScan(); };
+            toolbar.Controls.Add(_scanButton);
+
+            Label hint = Ui.Label(
+                "跳过 Windows、回收站、系统还原等系统目录，不跟随符号链接",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            hint.AutoSize = true;
+            hint.Location = new Point(574, 15);
+            toolbar.Controls.Add(hint);
+            root.Controls.Add(toolbar, 0, 2);
+
+            RoundedPanel gridCard = new RoundedPanel();
+            gridCard.Dock = DockStyle.Fill;
+            gridCard.Margin = new Padding(0, 0, 0, 12);
+            gridCard.Padding = new Padding(12);
+            _grid = new DataGridView();
+            _grid.Dock = DockStyle.Fill;
+            Ui.StyleGrid(_grid);
+            _grid.ReadOnly = true;
+            _grid.CellDoubleClick += delegate { OpenSelectedFile(); };
+
+            DataGridViewTextBoxColumn file = new DataGridViewTextBoxColumn();
+            file.Name = "File";
+            file.HeaderText = "文件";
+            file.FillWeight = 48F;
+            file.MinimumWidth = 260;
+
+            DataGridViewTextBoxColumn size = new DataGridViewTextBoxColumn();
+            size.Name = "Size";
+            size.HeaderText = "大小";
+            size.FillWeight = 12F;
+            size.MinimumWidth = 80;
+
+            DataGridViewTextBoxColumn modified = new DataGridViewTextBoxColumn();
+            modified.Name = "Modified";
+            modified.HeaderText = "修改时间";
+            modified.FillWeight = 16F;
+            modified.MinimumWidth = 120;
+
+            DataGridViewTextBoxColumn folder = new DataGridViewTextBoxColumn();
+            folder.Name = "Folder";
+            folder.HeaderText = "所在目录";
+            folder.FillWeight = 24F;
+            folder.MinimumWidth = 180;
+
+            _grid.Columns.Add(file);
+            _grid.Columns.Add(size);
+            _grid.Columns.Add(modified);
+            _grid.Columns.Add(folder);
+            gridCard.Controls.Add(_grid);
+            root.Controls.Add(gridCard, 0, 3);
+
+            Panel actions = new Panel();
+            actions.Dock = DockStyle.Fill;
+            root.Controls.Add(actions, 0, 4);
+
+            _status = Ui.Label(
+                "选择磁盘后开始扫描大文件。",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _status.AutoSize = true;
+            _status.Location = new Point(2, 20);
+            actions.Controls.Add(_status);
+
+            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Right;
+            buttons.Width = 300;
+            buttons.FlowDirection = FlowDirection.RightToLeft;
+            buttons.WrapContents = false;
+
+            _openButton = Ui.CreateButton("打开所在位置", false);
+            _openButton.Width = 124;
+            _openButton.Enabled = false;
+            _openButton.Click += delegate { OpenSelectedFile(); };
+            _stopButton = Ui.CreateButton("停止扫描", false);
+            _stopButton.Width = 96;
+            _stopButton.Enabled = false;
+            _stopButton.Click += delegate { _cancel = true; };
+            buttons.Controls.Add(_openButton);
+            buttons.Controls.Add(_stopButton);
+            actions.Controls.Add(buttons);
+            actions.Resize += delegate
+            {
+                buttons.Left = actions.ClientSize.Width - buttons.Width;
+            };
+            _grid.SelectionChanged += delegate
+            {
+                _openButton.Enabled = _grid.SelectedRows.Count > 0;
+            };
+
+            Load += delegate { RefreshDrives(); };
+        }
+
+        public void RefreshDrives()
+        {
+            List<DriveUsage> drives = DiskSpaceService.ScanDrives();
+            string previous = _driveCombo.SelectedItem == null
+                ? null
+                : Convert.ToString(_driveCombo.SelectedItem);
+            _driveCombo.Items.Clear();
+            for (int i = 0; i < drives.Count && i < MaxCards; i++)
+            {
+                DriveUsage drive = drives[i];
+                _cards[i].Visible = true;
+                _driveNames[i].Text = drive.Name + " · " + drive.Label;
+                _driveValues[i].Text = String.Format(
+                    "{0} 可用 / {1}",
+                    Format.Bytes(drive.FreeBytes),
+                    Format.Bytes(drive.TotalBytes));
+                _driveBars[i].Percent = drive.UsedPercent;
+                _driveBars[i].FillColor = drive.UsedPercent >= 90
+                    ? Palette.Danger
+                    : drive.UsedPercent >= 75
+                        ? Palette.Warning
+                        : Palette.Accent;
+                _driveBars[i].Invalidate();
+            }
+            for (int i = drives.Count; i < MaxCards; i++)
+            {
+                _cards[i].Visible = false;
+            }
+            _lastDriveCount = drives.Count;
+            foreach (DriveUsage drive in drives)
+            {
+                _driveCombo.Items.Add(drive.Name);
+            }
+            if (_driveCombo.Items.Count > 0)
+            {
+                int index = previous == null ? 0 : _driveCombo.Items.IndexOf(previous);
+                _driveCombo.SelectedIndex = index >= 0 ? index : 0;
+            }
+        }
+
+        private static ComboBox CreateToolbarCombo()
+        {
+            ComboBox combo = new ComboBox();
+            combo.DropDownStyle = ComboBoxStyle.DropDownList;
+            combo.FlatStyle = FlatStyle.Flat;
+            combo.Font = Palette.Body;
+            combo.BackColor = Palette.Card;
+            combo.ForeColor = Palette.Ink;
+            combo.Height = 30;
+            combo.HandleCreated += delegate
+            {
+                NativeSystem.ApplyControlTheme(combo.Handle, Palette.IsDark, true);
+            };
+            return combo;
+        }
+
+        private long MinimumBytes()
+        {
+            switch (_sizeCombo.SelectedIndex)
+            {
+                case 0:
+                    return 100L * 1024L * 1024L;
+                case 1:
+                    return 500L * 1024L * 1024L;
+                case 3:
+                    return 5L * 1024L * 1024L * 1024L;
+                default:
+                    return 1024L * 1024L * 1024L;
+            }
+        }
+
+        private void StartScan()
+        {
+            if (_scanning || _driveCombo.SelectedItem == null)
+            {
+                if (_driveCombo.SelectedItem == null)
+                {
+                    _status.Text = "没有可扫描的磁盘。";
+                    _status.ForeColor = Palette.Warning;
+                }
+                return;
+            }
+            string drive = Convert.ToString(_driveCombo.SelectedItem);
+            string root = drive.EndsWith("\\", StringComparison.Ordinal)
+                ? drive
+                : drive + "\\";
+            long minimum = MinimumBytes();
+            _cancel = false;
+            _scanning = true;
+            _scanButton.Enabled = false;
+            _stopButton.Enabled = true;
+            _openButton.Enabled = false;
+            _grid.Rows.Clear();
+            _status.ForeColor = Palette.Muted;
+            _status.Text = "正在扫描 " + root + " …";
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                LargeFileScanResult result = DiskSpaceService.ScanLargeFiles(
+                    root,
+                    minimum,
+                    200,
+                    delegate(string text)
+                    {
+                        SafeBeginInvoke(delegate { _status.Text = text; });
+                    },
+                    delegate { return _cancel; });
+                SafeBeginInvoke(delegate { ApplyScanResult(result, minimum); });
+            });
+        }
+
+        private void ApplyScanResult(LargeFileScanResult result, long minimum)
+        {
+            _scanning = false;
+            _scanButton.Enabled = true;
+            _stopButton.Enabled = false;
+            _grid.Rows.Clear();
+            foreach (LargeFileInfo file in result.Files)
+            {
+                int index = _grid.Rows.Add();
+                DataGridViewRow row = _grid.Rows[index];
+                row.Tag = file;
+                row.Cells["File"].Value = System.IO.Path.GetFileName(file.Path);
+                row.Cells["Size"].Value = Format.Bytes(file.SizeBytes);
+                row.Cells["Modified"].Value = file.Modified.ToString("yyyy-MM-dd HH:mm");
+                row.Cells["Folder"].Value = file.Directory;
+                row.Cells["File"].ToolTipText = file.Path;
+                row.Cells["Folder"].ToolTipText = file.Directory;
+            }
+            if (!String.IsNullOrWhiteSpace(result.Error))
+            {
+                _status.Text = "扫描失败：" + result.Error;
+                _status.ForeColor = Palette.Danger;
+                return;
+            }
+            if (result.Cancelled)
+            {
+                _status.Text = String.Format(
+                    "已停止扫描，共检查 {0} 个文件，找到 {1} 个大于 {2} 的文件。",
+                    result.ScannedFiles,
+                    result.Files.Count,
+                    Format.Bytes(minimum));
+                _status.ForeColor = Palette.Warning;
+                return;
+            }
+            _status.Text = String.Format(
+                "扫描完成：检查 {0} 个文件（共 {1}），找到 {2} 个大于 {3} 的文件。",
+                result.ScannedFiles,
+                Format.Bytes(result.ScannedBytes),
+                result.Files.Count,
+                Format.Bytes(minimum));
+            _status.ForeColor = Palette.Muted;
+            _openButton.Enabled = _grid.SelectedRows.Count > 0;
+        }
+
+        private void OpenSelectedFile()
+        {
+            if (_grid.SelectedRows.Count == 0)
+            {
+                return;
+            }
+            LargeFileInfo file = _grid.SelectedRows[0].Tag as LargeFileInfo;
+            if (file == null)
+            {
+                return;
+            }
+            try
+            {
+                Process.Start("explorer.exe", "/select,\"" + file.Path + "\"");
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "无法打开位置：" + ex.Message;
+                _status.ForeColor = Palette.Danger;
+            }
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal sealed class SystemInfoPage : UserControl
+    {
+        private readonly Dictionary<string, Label> _values =
+            new Dictionary<string, Label>();
+        private readonly ToolTip _tips = new ToolTip();
+        private readonly Label _status;
+        private bool _loading;
+        private DateTime _lastRefresh = DateTime.MinValue;
+
+        public SystemInfoPage()
+        {
+            BackColor = Palette.Canvas;
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 3;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            Controls.Add(root);
+
+            root.Controls.Add(
+                Ui.BuildPageHeader(
+                    "系统信息",
+                    "处理器、显卡、内存、磁盘和系统版本的一屏概览",
+                    "重新读取",
+                    delegate { RefreshInfo(true); }),
+                0,
+                0);
+
+            TableLayoutPanel content = new TableLayoutPanel();
+            content.Dock = DockStyle.Fill;
+            content.Margin = new Padding(0, 0, 0, 8);
+            content.ColumnCount = 2;
+            content.RowCount = 3;
+            content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 250F));
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 160F));
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 176F));
+
+            RoundedPanel devices = BuildInfoCard(
+                "设备与系统",
+                new string[] { "计算机名", "设备型号", "操作系统", "系统版本", "安装日期", "上次开机" });
+            devices.Margin = new Padding(0, 0, 6, 10);
+            content.Controls.Add(devices, 0, 0);
+
+            RoundedPanel runtime = BuildInfoCard(
+                "运行状态",
+                new string[] { "已运行时长", "当前用户", "系统架构", "数据目录" });
+            runtime.Margin = new Padding(6, 0, 0, 10);
+            content.Controls.Add(runtime, 1, 0);
+
+            RoundedPanel cpu = BuildInfoCard(
+                "处理器",
+                new string[] { "处理器型号", "核心 / 线程", "最高主频" });
+            cpu.Margin = new Padding(0, 0, 6, 10);
+            content.Controls.Add(cpu, 0, 1);
+
+            RoundedPanel gpu = BuildInfoCard(
+                "显卡",
+                new string[] { "显卡型号", "显存" });
+            gpu.Margin = new Padding(6, 0, 0, 10);
+            content.Controls.Add(gpu, 1, 1);
+
+            RoundedPanel memory = BuildInfoCard(
+                "内存",
+                new string[] { "总容量", "内存条", "当前占用" });
+            memory.Margin = new Padding(0, 0, 6, 0);
+            content.Controls.Add(memory, 0, 2);
+
+            RoundedPanel disks = BuildInfoCard(
+                "磁盘",
+                new string[] { "磁盘数量", "磁盘列表", "系统盘可用" });
+            disks.Margin = new Padding(6, 0, 0, 0);
+            content.Controls.Add(disks, 1, 2);
+            root.Controls.Add(content, 0, 1);
+
+            _status = Ui.Label(
+                "正在读取系统信息…",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _status.Dock = DockStyle.Fill;
+            root.Controls.Add(_status, 0, 2);
+
+            Load += delegate { RefreshInfo(false); };
+        }
+
+        public void RefreshInfo()
+        {
+            RefreshInfo(false);
+        }
+
+        public void RefreshInfo(bool force)
+        {
+            if (_loading)
+            {
+                return;
+            }
+            if (!force && _lastRefresh != DateTime.MinValue &&
+                DateTime.Now - _lastRefresh < TimeSpan.FromSeconds(90))
+            {
+                return;
+            }
+            _loading = true;
+            _status.Text = "正在读取系统信息…";
+            _status.ForeColor = Palette.Muted;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                SystemInfoSnapshot snapshot = SystemInfoService.Read();
+                SafeBeginInvoke(delegate { ApplySnapshot(snapshot); });
+            });
+        }
+
+        private void ApplySnapshot(SystemInfoSnapshot snapshot)
+        {
+            _loading = false;
+            _lastRefresh = DateTime.Now;
+
+            SetValue("计算机名", snapshot.ComputerName);
+            SetValue(
+                "设备型号",
+                JoinParts(snapshot.Manufacturer, snapshot.Model));
+            SetValue("操作系统", snapshot.OsCaption);
+            SetValue(
+                "系统版本",
+                JoinParts(
+                    snapshot.OsVersion,
+                    String.IsNullOrWhiteSpace(snapshot.OsBuild)
+                        ? null
+                        : "Build " + snapshot.OsBuild,
+                    snapshot.Architecture));
+            SetValue(
+                "安装日期",
+                snapshot.InstallDate.HasValue
+                    ? snapshot.InstallDate.Value.ToString("yyyy-MM-dd")
+                    : "未知");
+            SetValue(
+                "上次开机",
+                snapshot.LastBoot.HasValue
+                    ? snapshot.LastBoot.Value.ToString("yyyy-MM-dd HH:mm")
+                    : "未知");
+
+            TimeSpan uptime = snapshot.Uptime;
+            SetValue("已运行时长", FormatUptime(uptime));
+            SetValue("当前用户", snapshot.UserName);
+            SetValue("系统架构", snapshot.Architecture);
+            SetValue("数据目录", AppPaths.DataDirectory);
+
+            SetValue("处理器型号", snapshot.CpuName);
+            SetValue(
+                "核心 / 线程",
+                snapshot.CpuCores > 0
+                    ? snapshot.CpuCores + " 核 / " + snapshot.CpuThreads + " 线程"
+                    : "未知");
+            SetValue(
+                "最高主频",
+                snapshot.CpuClockMhz > 0
+                    ? (snapshot.CpuClockMhz / 1000.0).ToString("0.00") + " GHz"
+                    : "未知");
+
+            SetValue("显卡型号", snapshot.GpuName);
+            SetValue("显存", snapshot.GpuMemoryBytes > 0
+                ? Format.Bytes(snapshot.GpuMemoryBytes)
+                : "未读取到");
+
+            SetValue("总容量", Format.Bytes(snapshot.TotalMemoryBytes));
+            string moduleText = "未读取到";
+            if (snapshot.MemoryModules.Count > 0)
+            {
+                MemoryModuleInfo module = snapshot.MemoryModules[0];
+                StringBuilder modules = new StringBuilder();
+                if (snapshot.MemoryModules.Count > 1)
+                {
+                    modules.Append(snapshot.MemoryModules.Count).Append(" 条 · ");
+                }
+                modules.Append(Format.Bytes(module.CapacityBytes));
+                if (!String.IsNullOrWhiteSpace(module.Speed))
+                {
+                    modules.Append(" · ").Append(module.Speed).Append(" MT/s");
+                }
+                if (!String.IsNullOrWhiteSpace(module.Manufacturer))
+                {
+                    modules.Append(" · ").Append(module.Manufacturer);
+                }
+                moduleText = modules.ToString();
+            }
+            SetValue("内存条", moduleText);
+            MemoryMetrics memory = NativeSystem.GetMemory();
+            SetValue(
+                "当前占用",
+                String.Format(
+                    "{0} 可用 / {1}",
+                    Format.Bytes(memory.AvailablePhysical),
+                    Format.Bytes(memory.TotalPhysical)));
+
+            SetValue("磁盘数量", snapshot.Disks.Count + " 块");
+            string diskListText = "未读取到";
+            if (snapshot.Disks.Count > 0)
+            {
+                DiskDeviceInfo disk = snapshot.Disks[0];
+                StringBuilder diskText = new StringBuilder();
+                if (snapshot.Disks.Count > 1)
+                {
+                    diskText.Append(snapshot.Disks.Count).Append(" 块 · ");
+                }
+                diskText.Append(String.IsNullOrWhiteSpace(disk.Model) ? "磁盘" : disk.Model);
+                if (disk.SizeBytes > 0)
+                {
+                    diskText.Append(" · ").Append(Format.Bytes(disk.SizeBytes));
+                }
+                if (!String.IsNullOrWhiteSpace(disk.Status))
+                {
+                    diskText.Append(" · ").Append(disk.Status);
+                }
+                diskListText = diskText.ToString();
+            }
+            SetValue("磁盘列表", diskListText);
+
+            string systemDrive = null;
+            try
+            {
+                systemDrive = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
+            }
+            catch
+            {
+            }
+            string systemDriveText = "未知";
+            foreach (DriveUsage drive in DiskSpaceService.ScanDrives())
+            {
+                if (systemDrive != null &&
+                    drive.Name.StartsWith(
+                        systemDrive.TrimEnd('\\'),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    systemDriveText = String.Format(
+                        "{0} 剩余 {1} / {2}",
+                        drive.Name,
+                        Format.Bytes(drive.FreeBytes),
+                        Format.Bytes(drive.TotalBytes));
+                    break;
+                }
+            }
+            SetValue("系统盘可用", systemDriveText);
+
+            _status.Text = "信息读取于 " + DateTime.Now.ToString("HH:mm:ss") +
+                "，磁盘和内存为系统报告值。";
+            _status.ForeColor = Palette.Muted;
+        }
+
+        private void SetValue(string key, string value)
+        {
+            Label label;
+            if (!_values.TryGetValue(key, out label) || label == null)
+            {
+                return;
+            }
+            label.Text = String.IsNullOrWhiteSpace(value) ? "—" : value;
+            _tips.SetToolTip(label, label.Text);
+        }
+
+        private static string JoinParts(params string[] parts)
+        {
+            StringBuilder builder = new StringBuilder();
+            foreach (string part in parts)
+            {
+                if (String.IsNullOrWhiteSpace(part))
+                {
+                    continue;
+                }
+                if (builder.Length > 0)
+                {
+                    builder.Append(" · ");
+                }
+                builder.Append(part.Trim());
+            }
+            return builder.ToString();
+        }
+
+        private static string FormatUptime(TimeSpan uptime)
+        {
+            if (uptime <= TimeSpan.Zero)
+            {
+                return "未知";
+            }
+            if (uptime.TotalDays >= 1)
+            {
+                return String.Format(
+                    "{0} 天 {1} 小时 {2} 分",
+                    (int)uptime.TotalDays,
+                    uptime.Hours,
+                    uptime.Minutes);
+            }
+            return String.Format("{0} 小时 {1} 分", uptime.Hours, uptime.Minutes);
+        }
+
+        private RoundedPanel BuildInfoCard(string title, string[] keys)
+        {
+            RoundedPanel card = new RoundedPanel();
+            card.Dock = DockStyle.Fill;
+            card.Padding = new Padding(18, 12, 18, 8);
+
+            TableLayoutPanel layout = new TableLayoutPanel();
+            layout.Dock = DockStyle.Fill;
+            layout.ColumnCount = 2;
+            layout.RowCount = keys.Length + 1;
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+            float rowPercent = keys.Length > 0 ? 100F / keys.Length : 100F;
+            for (int i = 0; i < keys.Length; i++)
+            {
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent, rowPercent));
+            }
+
+            Label titleLabel = Ui.Label(
+                title,
+                Palette.SectionTitle,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            titleLabel.Dock = DockStyle.Fill;
+            layout.Controls.Add(titleLabel, 0, 0);
+            layout.SetColumnSpan(titleLabel, 2);
+
+            for (int i = 0; i < keys.Length; i++)
+            {
+                Label keyLabel = Ui.Label(
+                    keys[i],
+                    Palette.Small,
+                    Palette.Muted,
+                    ContentAlignment.MiddleLeft);
+                keyLabel.Dock = DockStyle.Fill;
+                keyLabel.AutoSize = false;
+                Label valueLabel = Ui.Label(
+                    "读取中…",
+                    Palette.Body,
+                    Palette.Ink,
+                    ContentAlignment.MiddleLeft);
+                valueLabel.Dock = DockStyle.Fill;
+                valueLabel.AutoSize = false;
+                layout.Controls.Add(keyLabel, 0, i + 1);
+                layout.Controls.Add(valueLabel, 1, i + 1);
+                _values[keys[i]] = valueLabel;
+            }
+            card.Controls.Add(layout);
+            return card;
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
     internal static class SelfTest
     {
         public static bool Run(string reportPath)
@@ -4615,6 +6432,44 @@ namespace PcManagerLite
                     ", latency=" + pingReport.InternetLatencyMs.ToString("0") +
                     ", loss=" + pingReport.PacketLossPercent.ToString("0.#") +
                     ", dns=" + pingReport.DnsResolved);
+
+                List<InstalledProgram> installedPrograms = InstalledProgramService.Scan();
+                int uninstallablePrograms = 0;
+                foreach (InstalledProgram program in installedPrograms)
+                {
+                    if (program.CanUninstall)
+                    {
+                        uninstallablePrograms++;
+                    }
+                }
+                report.AppendLine(
+                    "Installed programs: total=" + installedPrograms.Count +
+                    ", uninstallable=" + uninstallablePrograms);
+
+                List<DriveUsage> drives = DiskSpaceService.ScanDrives();
+                report.AppendLine("Drives: " + drives.Count);
+                foreach (DriveUsage drive in drives)
+                {
+                    report.AppendLine(
+                        String.Format(
+                            "  {0} {1}: used={2:0.0}% free={3}",
+                            drive.Name,
+                            drive.Label,
+                            drive.UsedPercent,
+                            Format.Bytes(drive.FreeBytes)));
+                }
+
+                SystemInfoSnapshot systemInfo = SystemInfoService.Read();
+                report.AppendLine(
+                    "System info: cpu=" + systemInfo.CpuName +
+                    ", cores=" + systemInfo.CpuCores +
+                    ", gpu=" + systemInfo.GpuName +
+                    ", memoryModules=" + systemInfo.MemoryModules.Count +
+                    ", disks=" + systemInfo.Disks.Count +
+                    ", os=" + systemInfo.OsCaption);
+                report.AppendLine(
+                    "Scheduled cleanup task present: " +
+                    ScheduledCleanupService.IsEnabled());
 
                 BackupStore backup = BackupStore.Load();
                 report.AppendLine("Restorable system backup present: " + backup.HasSettings);
@@ -4818,14 +6673,15 @@ namespace PcManagerLite
                     Application.DoEvents();
                     form.NavigateForTest(page);
                     Application.DoEvents();
-                    if (String.Equals(page, "settings", StringComparison.OrdinalIgnoreCase))
+                    bool settingsPage = String.Equals(
+                        page,
+                        "settings",
+                        StringComparison.OrdinalIgnoreCase);
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(settingsPage ? 4 : 2.5);
+                    while (DateTime.UtcNow < deadline)
                     {
-                        DateTime deadline = DateTime.UtcNow.AddSeconds(4);
-                        while (DateTime.UtcNow < deadline)
-                        {
-                            Application.DoEvents();
-                            Thread.Sleep(50);
-                        }
+                        Application.DoEvents();
+                        Thread.Sleep(50);
                     }
                     form.PerformLayout();
                     Application.DoEvents();

@@ -188,6 +188,13 @@ namespace PcManagerLite
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hwnd);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SendMessage(
+            IntPtr hwnd,
+            int message,
+            IntPtr wParam,
+            string lParam);
+
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
         private static extern int SHQueryRecycleBin(
             string rootPath,
@@ -276,6 +283,21 @@ namespace PcManagerLite
                 {
                     DwmSetWindowAttribute(hwnd, 19, ref enabled, sizeof(int));
                 }
+            }
+            catch
+            {
+            }
+        }
+
+        public static void SetCueBanner(IntPtr hwnd, string text)
+        {
+            if (hwnd == IntPtr.Zero || String.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+            try
+            {
+                SendMessage(hwnd, 0x1501, (IntPtr)1, text);
             }
             catch
             {
@@ -3095,6 +3117,7 @@ namespace PcManagerLite
     internal sealed class ManagerSettings
     {
         public string Theme = "system";
+        public string Accent = "blue";
         public bool CheckUpdatesOnStart = true;
 
         public static ManagerSettings Load()
@@ -3128,6 +3151,10 @@ namespace PcManagerLite
                                 settings.Theme = value.ToLowerInvariant();
                             }
                         }
+                        else if (key.Equals("Accent", StringComparison.OrdinalIgnoreCase))
+                        {
+                            settings.Accent = Palette.NormalizeAccent(value);
+                        }
                         else if (key.Equals("CheckUpdatesOnStart", StringComparison.OrdinalIgnoreCase))
                         {
                             bool parsed;
@@ -3159,6 +3186,7 @@ namespace PcManagerLite
                     new string[]
                     {
                         "Theme=" + Theme,
+                        "Accent=" + Accent,
                         "CheckUpdatesOnStart=" + CheckUpdatesOnStart.ToString()
                     },
                     Encoding.UTF8);
@@ -4295,6 +4323,828 @@ namespace PcManagerLite
                 process.WaitForExit(6000);
                 output = stdout + (String.IsNullOrWhiteSpace(stderr) ? "" : "\r\n" + stderr);
                 exitCode = process.HasExited ? process.ExitCode : -1;
+            }
+        }
+    }
+
+    internal sealed class InstalledProgram
+    {
+        public string Name;
+        public string Publisher;
+        public string Version;
+        public string InstallLocation;
+        public string UninstallString;
+        public string QuietUninstallString;
+        public string InstallDate;
+        public long SizeBytes;
+        public bool CanUninstall;
+    }
+
+    internal static class InstalledProgramService
+    {
+        public static List<InstalledProgram> Scan()
+        {
+            Dictionary<string, InstalledProgram> found =
+                new Dictionary<string, InstalledProgram>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                Collect(found, RegistryHive.LocalMachine, RegistryView.Registry64);
+                Collect(found, RegistryHive.LocalMachine, RegistryView.Registry32);
+                Collect(found, RegistryHive.CurrentUser, RegistryView.Default);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("扫描已安装程序失败: " + ex.Message);
+            }
+            List<InstalledProgram> items = new List<InstalledProgram>(found.Values);
+            items.Sort(delegate(InstalledProgram left, InstalledProgram right)
+            {
+                return String.Compare(
+                    left.Name,
+                    right.Name,
+                    StringComparison.CurrentCultureIgnoreCase);
+            });
+            return items;
+        }
+
+        public static bool LaunchUninstall(InstalledProgram program, out string error)
+        {
+            error = String.Empty;
+            if (program == null || String.IsNullOrWhiteSpace(program.UninstallString))
+            {
+                error = "该程序没有提供卸载命令。";
+                return false;
+            }
+            try
+            {
+                string command = program.UninstallString.Trim();
+                if (String.IsNullOrWhiteSpace(command))
+                {
+                    error = "卸载命令为空。";
+                    return false;
+                }
+                command = Regex.Replace(
+                    command,
+                    @"(msiexec(?:\.exe)?\s+)/I",
+                    "$1/X",
+                    RegexOptions.IgnoreCase);
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = "cmd.exe";
+                startInfo.Arguments = "/c " + command;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                Process.Start(startInfo);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        public static bool OpenInstallLocation(InstalledProgram program, out string error)
+        {
+            error = String.Empty;
+            try
+            {
+                string path = program == null ? null : program.InstallLocation;
+                if (String.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+                {
+                    error = "没有可用的安装目录。";
+                    return false;
+                }
+                Process.Start("explorer.exe", "\"" + path.Trim('"') + "\"");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static void Collect(
+            Dictionary<string, InstalledProgram> found,
+            RegistryHive hive,
+            RegistryView view)
+        {
+            using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, view))
+            using (RegistryKey uninstall = baseKey.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                false))
+            {
+                if (uninstall == null)
+                {
+                    return;
+                }
+                foreach (string subKeyName in uninstall.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using (RegistryKey item = uninstall.OpenSubKey(subKeyName, false))
+                        {
+                            if (item == null)
+                            {
+                                continue;
+                            }
+                            string name = ReadString(item, "DisplayName");
+                            if (String.IsNullOrWhiteSpace(name))
+                            {
+                                continue;
+                            }
+                            if (ReadInt(item, "SystemComponent") == 1 ||
+                                ReadInt(item, "NoDisplay") == 1)
+                            {
+                                continue;
+                            }
+                            if (!String.IsNullOrWhiteSpace(ReadString(item, "ParentKeyName")))
+                            {
+                                continue;
+                            }
+
+                            string version = ReadString(item, "DisplayVersion");
+                            string key = name.Trim() + "|" + version.Trim();
+                            if (found.ContainsKey(key))
+                            {
+                                continue;
+                            }
+
+                            InstalledProgram program = new InstalledProgram();
+                            program.Name = name.Trim();
+                            program.Version = version;
+                            program.Publisher = ReadString(item, "Publisher");
+                            program.InstallLocation = ReadString(item, "InstallLocation");
+                            program.UninstallString = ReadString(item, "UninstallString");
+                            program.QuietUninstallString =
+                                ReadString(item, "QuietUninstallString");
+                            program.InstallDate = FormatInstallDate(
+                                ReadString(item, "InstallDate"));
+                            long sizeKb = ReadInt64(item, "EstimatedSize");
+                            program.SizeBytes = sizeKb > 0 ? sizeKb * 1024L : 0L;
+                            program.CanUninstall =
+                                !String.IsNullOrWhiteSpace(program.UninstallString);
+                            found[key] = program;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        private static string ReadString(RegistryKey key, string name)
+        {
+            try
+            {
+                object value = key.GetValue(name);
+                return value == null ? String.Empty : Convert.ToString(value).Trim();
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static int ReadInt(RegistryKey key, string name)
+        {
+            try
+            {
+                object value = key.GetValue(name);
+                return value == null ? 0 : Convert.ToInt32(value);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static long ReadInt64(RegistryKey key, string name)
+        {
+            try
+            {
+                object value = key.GetValue(name);
+                return value == null ? 0L : Convert.ToInt64(value);
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private static string FormatInstallDate(string raw)
+        {
+            if (String.IsNullOrWhiteSpace(raw) || raw.Length != 8)
+            {
+                return String.Empty;
+            }
+            return raw.Substring(0, 4) + "-" + raw.Substring(4, 2) + "-" + raw.Substring(6, 2);
+        }
+    }
+
+    internal sealed class DriveUsage
+    {
+        public string Name;
+        public string Label;
+        public string Format;
+        public long TotalBytes;
+        public long FreeBytes;
+        public long UsedBytes;
+
+        public double UsedPercent
+        {
+            get
+            {
+                return TotalBytes <= 0 ? 0 : UsedBytes * 100.0 / TotalBytes;
+            }
+        }
+    }
+
+    internal sealed class LargeFileInfo
+    {
+        public string Path;
+        public long SizeBytes;
+        public DateTime Modified;
+        public string Directory
+        {
+            get
+            {
+                try
+                {
+                    return System.IO.Path.GetDirectoryName(Path);
+                }
+                catch
+                {
+                    return String.Empty;
+                }
+            }
+        }
+    }
+
+    internal sealed class LargeFileScanResult
+    {
+        public readonly List<LargeFileInfo> Files = new List<LargeFileInfo>();
+        public long ScannedBytes;
+        public int ScannedFiles;
+        public bool Cancelled;
+        public string Error;
+    }
+
+    internal static class DiskSpaceService
+    {
+        public static List<DriveUsage> ScanDrives()
+        {
+            List<DriveUsage> drives = new List<DriveUsage>();
+            try
+            {
+                foreach (DriveInfo drive in DriveInfo.GetDrives())
+                {
+                    try
+                    {
+                        if (!drive.IsReady)
+                        {
+                            continue;
+                        }
+                        if (drive.DriveType != DriveType.Fixed &&
+                            drive.DriveType != DriveType.Removable)
+                        {
+                            continue;
+                        }
+                        DriveUsage usage = new DriveUsage();
+                        usage.Name = drive.Name.TrimEnd('\\');
+                        usage.Label = String.IsNullOrWhiteSpace(drive.VolumeLabel)
+                            ? "本地磁盘"
+                            : drive.VolumeLabel.Trim();
+                        usage.Format = drive.DriveFormat;
+                        usage.TotalBytes = drive.TotalSize;
+                        usage.FreeBytes = drive.TotalFreeSpace;
+                        usage.UsedBytes = usage.TotalBytes - usage.FreeBytes;
+                        drives.Add(usage);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("扫描磁盘失败: " + ex.Message);
+            }
+            return drives;
+        }
+
+        public static LargeFileScanResult ScanLargeFiles(
+            string root,
+            long minimumBytes,
+            int maxResults,
+            Action<string> progress,
+            Func<bool> cancelled)
+        {
+            LargeFileScanResult result = new LargeFileScanResult();
+            if (String.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            {
+                result.Error = "目录不存在。";
+                return result;
+            }
+            if (maxResults < 1)
+            {
+                maxResults = 100;
+            }
+
+            Stack<string> pending = new Stack<string>();
+            pending.Push(root);
+            try
+            {
+                while (pending.Count > 0)
+                {
+                    if (cancelled != null && cancelled())
+                    {
+                        result.Cancelled = true;
+                        break;
+                    }
+                    string directory = pending.Pop();
+                    DirectoryInfo info;
+                    try
+                    {
+                        info = new DirectoryInfo(directory);
+                        if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            continue;
+                        }
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (!String.Equals(directory, root, StringComparison.OrdinalIgnoreCase) &&
+                        IsExcludedDirectory(info.Name))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        foreach (FileInfo file in info.GetFiles())
+                        {
+                            result.ScannedFiles++;
+                            result.ScannedBytes += file.Length;
+                            if (file.Length < minimumBytes)
+                            {
+                                continue;
+                            }
+                            LargeFileInfo item = new LargeFileInfo();
+                            item.Path = file.FullName;
+                            item.SizeBytes = file.Length;
+                            item.Modified = file.LastWriteTime;
+                            result.Files.Add(item);
+                            if (result.Files.Count > maxResults)
+                            {
+                                result.Files.Sort(CompareBySize);
+                                result.Files.RemoveRange(
+                                    maxResults,
+                                    result.Files.Count - maxResults);
+                            }
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    try
+                    {
+                        foreach (DirectoryInfo child in info.GetDirectories())
+                        {
+                            if ((child.Attributes & FileAttributes.ReparsePoint) != 0)
+                            {
+                                continue;
+                            }
+                            if (IsExcludedDirectory(child.Name))
+                            {
+                                continue;
+                            }
+                            pending.Push(child.FullName);
+                        }
+                    }
+                    catch
+                    {
+                    }
+
+                    if (progress != null && result.ScannedFiles > 0 &&
+                        result.ScannedFiles % 1500 == 0)
+                    {
+                        progress("已扫描 " + result.ScannedFiles + " 个文件，正在继续…");
+                    }
+                }
+                result.Files.Sort(CompareBySize);
+            }
+            catch (Exception ex)
+            {
+                result.Error = ex.Message;
+                FileLogger.Write("大文件扫描失败: " + ex.Message);
+            }
+            return result;
+        }
+
+        private static int CompareBySize(LargeFileInfo left, LargeFileInfo right)
+        {
+            return right.SizeBytes.CompareTo(left.SizeBytes);
+        }
+
+        private static bool IsExcludedDirectory(string name)
+        {
+            return name.Equals("Windows", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("$Recycle.Bin", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Recovery", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Config.Msi", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("WindowsApps", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("WinSxS", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    internal sealed class MemoryModuleInfo
+    {
+        public long CapacityBytes;
+        public string Speed;
+        public string Manufacturer;
+        public string Slot;
+    }
+
+    internal sealed class DiskDeviceInfo
+    {
+        public string Model;
+        public long SizeBytes;
+        public string Interface;
+        public string MediaType;
+        public string Status;
+    }
+
+    internal sealed class SystemInfoSnapshot
+    {
+        public string ComputerName;
+        public string UserName;
+        public string Manufacturer;
+        public string Model;
+        public string OsCaption;
+        public string OsVersion;
+        public string OsBuild;
+        public string Architecture;
+        public DateTime? InstallDate;
+        public DateTime? LastBoot;
+        public string CpuName;
+        public int CpuCores;
+        public int CpuThreads;
+        public int CpuClockMhz;
+        public string GpuName;
+        public long GpuMemoryBytes;
+        public long TotalMemoryBytes;
+        public readonly List<MemoryModuleInfo> MemoryModules =
+            new List<MemoryModuleInfo>();
+        public readonly List<DiskDeviceInfo> Disks = new List<DiskDeviceInfo>();
+
+        public TimeSpan Uptime
+        {
+            get
+            {
+                return LastBoot.HasValue ? DateTime.Now - LastBoot.Value : TimeSpan.Zero;
+            }
+        }
+    }
+
+    internal static class SystemInfoService
+    {
+        public static SystemInfoSnapshot Read()
+        {
+            SystemInfoSnapshot snapshot = new SystemInfoSnapshot();
+            snapshot.ComputerName = Environment.MachineName;
+            snapshot.UserName = Environment.UserName;
+            ReadComputer(snapshot);
+            ReadProcessor(snapshot);
+            ReadGraphics(snapshot);
+            ReadMemory(snapshot);
+            ReadDisks(snapshot);
+            ReadOperatingSystem(snapshot);
+            return snapshot;
+        }
+
+        private static void ReadComputer(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Manufacturer, Model, Name, UserName FROM Win32_ComputerSystem"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        snapshot.Manufacturer = Value(item, "Manufacturer");
+                        snapshot.Model = Value(item, "Model");
+                        string name = Value(item, "Name");
+                        if (!String.IsNullOrWhiteSpace(name))
+                        {
+                            snapshot.ComputerName = name;
+                        }
+                        string user = Value(item, "UserName");
+                        if (!String.IsNullOrWhiteSpace(user))
+                        {
+                            snapshot.UserName = user;
+                        }
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ReadProcessor(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed " +
+                    "FROM Win32_Processor"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        snapshot.CpuName = Value(item, "Name");
+                        snapshot.CpuCores = (int)Number(item, "NumberOfCores");
+                        snapshot.CpuThreads = (int)Number(item, "NumberOfLogicalProcessors");
+                        snapshot.CpuClockMhz = (int)Number(item, "MaxClockSpeed");
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ReadGraphics(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Name, AdapterRAM FROM Win32_VideoController"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        string name = Value(item, "Name");
+                        if (String.IsNullOrWhiteSpace(name))
+                        {
+                            continue;
+                        }
+                        if (String.IsNullOrWhiteSpace(snapshot.GpuName))
+                        {
+                            snapshot.GpuName = name;
+                            snapshot.GpuMemoryBytes = Number(item, "AdapterRAM");
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ReadMemory(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Capacity, Speed, Manufacturer, DeviceLocator " +
+                    "FROM Win32_PhysicalMemory"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        MemoryModuleInfo module = new MemoryModuleInfo();
+                        module.CapacityBytes = Number(item, "Capacity");
+                        module.Speed = Value(item, "Speed");
+                        module.Manufacturer = Value(item, "Manufacturer");
+                        module.Slot = Value(item, "DeviceLocator");
+                        snapshot.MemoryModules.Add(module);
+                        snapshot.TotalMemoryBytes += module.CapacityBytes;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            if (snapshot.TotalMemoryBytes <= 0)
+            {
+                snapshot.TotalMemoryBytes = NativeSystem.GetMemory().TotalPhysical;
+            }
+        }
+
+        private static void ReadDisks(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Model, Size, InterfaceType, MediaType, Status FROM Win32_DiskDrive"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        DiskDeviceInfo disk = new DiskDeviceInfo();
+                        disk.Model = Value(item, "Model");
+                        disk.SizeBytes = Number(item, "Size");
+                        disk.Interface = Value(item, "InterfaceType");
+                        disk.MediaType = Value(item, "MediaType");
+                        disk.Status = Value(item, "Status");
+                        if (!String.IsNullOrWhiteSpace(disk.Model) || disk.SizeBytes > 0)
+                        {
+                            snapshot.Disks.Add(disk);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ReadOperatingSystem(SystemInfoSnapshot snapshot)
+        {
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    "SELECT Caption, Version, BuildNumber, OSArchitecture, " +
+                    "InstallDate, LastBootUpTime FROM Win32_OperatingSystem"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        snapshot.OsCaption = Value(item, "Caption");
+                        snapshot.OsVersion = Value(item, "Version");
+                        snapshot.OsBuild = Value(item, "BuildNumber");
+                        snapshot.Architecture = Value(item, "OSArchitecture");
+                        snapshot.InstallDate = Date(item, "InstallDate");
+                        snapshot.LastBoot = Date(item, "LastBootUpTime");
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            if (String.IsNullOrWhiteSpace(snapshot.OsCaption))
+            {
+                snapshot.OsCaption = Environment.OSVersion.VersionString;
+            }
+        }
+
+        private static string Value(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                return value == null ? String.Empty : Convert.ToString(value).Trim();
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static long Number(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                if (value == null)
+                {
+                    return 0L;
+                }
+                if (value is ulong)
+                {
+                    ulong unsigned = (ulong)value;
+                    return unsigned > Int64.MaxValue ? Int64.MaxValue : (long)unsigned;
+                }
+                return Convert.ToInt64(value);
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private static DateTime? Date(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                string raw = Value(item, name);
+                if (String.IsNullOrWhiteSpace(raw))
+                {
+                    return null;
+                }
+                return ManagementDateTimeConverter.ToDateTime(raw);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    internal static class ScheduledCleanupService
+    {
+        public const string TaskName = "PcManagerLite AutoCleanup";
+
+        public static bool IsEnabled()
+        {
+            return Run("/Query /TN \"" + TaskName + "\"", 8000) == 0;
+        }
+
+        public static bool Enable(out string message)
+        {
+            message = String.Empty;
+            try
+            {
+                string executable = ShortcutManager.ApplicationExecutablePath();
+                if (String.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+                {
+                    message = "找不到当前程序路径，无法创建计划任务。";
+                    return false;
+                }
+                string action = "\"" + executable + "\" --auto-clean";
+                string arguments = String.Format(
+                    "/Create /F /SC WEEKLY /D SUN /ST 12:00 /IT /RL HIGHEST " +
+                    "/TN \"{0}\" /TR \"{1}\"",
+                    TaskName,
+                    action);
+                int code = Run(arguments, 20000);
+                if (code != 0)
+                {
+                    message = "创建计划任务失败，退出代码 " + code + "。";
+                    return false;
+                }
+                message = "已启用：每周日 12:00 自动清理临时文件。";
+                FileLogger.Write("已创建自动清理计划任务: " + TaskName);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = ex.Message;
+                return false;
+            }
+        }
+
+        public static bool Disable(out string message)
+        {
+            message = String.Empty;
+            try
+            {
+                int code = Run("/Delete /F /TN \"" + TaskName + "\"", 12000);
+                if (code != 0)
+                {
+                    message = "删除计划任务失败，退出代码 " + code + "。";
+                    return false;
+                }
+                message = "已关闭每周自动清理。";
+                FileLogger.Write("已删除自动清理计划任务: " + TaskName);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                message = ex.Message;
+                return false;
+            }
+        }
+
+        private static int Run(string arguments, int timeoutMs)
+        {
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = "schtasks.exe";
+                startInfo.Arguments = arguments;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                using (Process process = Process.Start(startInfo))
+                {
+                    process.StandardOutput.ReadToEnd();
+                    process.StandardError.ReadToEnd();
+                    if (!process.WaitForExit(timeoutMs))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch
+                        {
+                        }
+                        return -1;
+                    }
+                    return process.ExitCode;
+                }
+            }
+            catch
+            {
+                return -1;
             }
         }
     }
