@@ -16,8 +16,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyCompany("Joker X")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 Joker X")]
 [assembly: System.Reflection.AssemblyTrademark("jokerx.top")]
-[assembly: System.Reflection.AssemblyVersion("2.5.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.6.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.6.0.0")]
 
 namespace PcManagerLite
 {
@@ -70,6 +70,13 @@ namespace PcManagerLite
             if (HasArgument(args, "--auto-clean"))
             {
                 Environment.ExitCode = RunAutoClean();
+                return;
+            }
+
+            if (HasArgument(args, "--memory-clean"))
+            {
+                Environment.ExitCode = RunMemoryClean(
+                    GetArgumentValue(args, "--report"));
                 return;
             }
 
@@ -231,6 +238,42 @@ namespace PcManagerLite
             catch (Exception ex)
             {
                 FileLogger.Write("计划任务自动清理失败: " + ex);
+                return 1;
+            }
+        }
+
+        private static int RunMemoryClean(string reportPath)
+        {
+            try
+            {
+                MemoryCleanResult result = MemoryOptimizer.Clean(null);
+                StringBuilder report = new StringBuilder();
+                report.AppendLine("Success=" + result.Success);
+                report.AppendLine("BeforeAvailable=" + result.BeforeAvailable);
+                report.AppendLine("AfterAvailable=" + result.AfterAvailable);
+                report.AppendLine("FreedBytes=" + result.FreedBytes);
+                report.AppendLine("TrimmedProcesses=" + result.TrimmedProcesses);
+                report.AppendLine("WorkingSetsCleared=" + result.WorkingSetsCleared);
+                report.AppendLine("ModifiedListFlushed=" + result.ModifiedListFlushed);
+                report.AppendLine("StandbyListPurged=" + result.StandbyListPurged);
+                report.AppendLine("Error=" + (result.Error ?? "none"));
+                if (String.IsNullOrWhiteSpace(reportPath))
+                {
+                    reportPath = Path.Combine(
+                        Path.GetTempPath(),
+                        "PcManagerLite-memory-clean.txt");
+                }
+                string directory = Path.GetDirectoryName(reportPath);
+                if (!String.IsNullOrWhiteSpace(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+                File.WriteAllText(reportPath, report.ToString(), Encoding.UTF8);
+                return result.Success ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("内存加速测试失败: " + ex);
                 return 1;
             }
         }
@@ -856,6 +899,7 @@ namespace PcManagerLite
             if (page.Equals("cleanup", StringComparison.OrdinalIgnoreCase))
             {
                 Navigate(ManagerView.Cleanup);
+                _cleanupPage.Scan();
             }
             else if (page.Equals("programs", StringComparison.OrdinalIgnoreCase))
             {
@@ -1435,6 +1479,7 @@ namespace PcManagerLite
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.Clear(Parent != null ? Parent.BackColor : BackColor);
             using (GraphicsPath path = Ui.RoundedPath(
                 new Rectangle(0, 0, Width - 1, Height - 1),
                 Ui.Scale(e.Graphics, Radius)))
@@ -1465,6 +1510,7 @@ namespace PcManagerLite
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.Clear(Parent != null ? Parent.BackColor : BackColor);
             using (GraphicsPath path = Ui.RoundedPath(
                 new Rectangle(0, 0, Width - 1, Height - 1),
                 Ui.Scale(e.Graphics, 12)))
@@ -1829,7 +1875,9 @@ namespace PcManagerLite
         private readonly HealthRing _ring;
         private readonly Label _checkButtonLabel;
         private readonly Button _checkButton;
+        private readonly Button _memoryButton;
         private readonly Label _scoreHint;
+        private bool _memoryBusy;
         private readonly Label _ramValue;
         private readonly Label _pageFileValue;
         private readonly Label _gameValue;
@@ -1892,7 +1940,7 @@ namespace PcManagerLite
             heroText.Controls.Add(heroTitle);
 
             Label heroDescription = Ui.Label(
-                "检查垃圾、网络、游戏进程和虚拟内存；扫描不会自动修改系统。",
+                "检查垃圾、网络、游戏和虚拟内存，或一键释放内存；扫描不会自动修改系统。",
                 Palette.Body,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
@@ -1921,13 +1969,20 @@ namespace PcManagerLite
             };
             heroText.Controls.Add(_checkButton);
 
+            _memoryButton = Ui.CreateButton("释放内存", false);
+            _memoryButton.Width = 112;
+            _memoryButton.Height = 38;
+            _memoryButton.Location = new Point(142, 107);
+            _memoryButton.Click += delegate { BoostMemory(); };
+            heroText.Controls.Add(_memoryButton);
+
             _checkButtonLabel = Ui.Label(
                 "扫描过程不会自动删除任何文件",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
             _checkButtonLabel.AutoSize = true;
-            _checkButtonLabel.Location = new Point(146, 116);
+            _checkButtonLabel.Location = new Point(266, 116);
             heroText.Controls.Add(_checkButtonLabel);
 
             _ring = new HealthRing();
@@ -2275,6 +2330,68 @@ namespace PcManagerLite
             }
         }
 
+        private void BoostMemory()
+        {
+            if (_memoryBusy)
+            {
+                return;
+            }
+            _memoryBusy = true;
+            _memoryButton.Enabled = false;
+            _checkButton.Enabled = false;
+            _checkButtonLabel.Text = "正在整理内存…";
+            _checkButtonLabel.ForeColor = Palette.Muted;
+            _scoreHint.Text = "正在清空工作集、刷新修改页并整理待机列表…";
+            _scoreHint.ForeColor = Palette.Muted;
+
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                MemoryCleanResult result = MemoryOptimizer.Clean(
+                    delegate(string text)
+                    {
+                        SafeBeginInvoke(delegate { _scoreHint.Text = text; });
+                    });
+                SafeBeginInvoke(delegate
+                {
+                    _memoryBusy = false;
+                    _memoryButton.Enabled = true;
+                    _checkButton.Enabled = true;
+                    if (!String.IsNullOrWhiteSpace(result.Error))
+                    {
+                        _checkButtonLabel.Text = "内存加速失败：" + result.Error;
+                        _checkButtonLabel.ForeColor = Palette.Danger;
+                        _scoreHint.Text = "可尝试以管理员身份运行后重试。";
+                    }
+                    else
+                    {
+                        _checkButtonLabel.Text = String.Format(
+                            "已释放约 {0}，当前可用 {1}",
+                            Format.Bytes(result.FreedBytes),
+                            Format.Bytes(result.AfterAvailable));
+                        _checkButtonLabel.ForeColor = Palette.Success;
+                        _scoreHint.Text =
+                            "内存加速完成；待机缓存会按需重建，首次打开大型程序可能稍慢。";
+                    }
+                    _scoreHint.ForeColor = Palette.Muted;
+                    RefreshKnownFromParent();
+                });
+            });
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+
         private void RefreshKnownFromParent()
         {
             MainForm form = FindForm() as MainForm;
@@ -2430,25 +2547,47 @@ namespace PcManagerLite
             size.FillWeight = 15F;
             size.MinimumWidth = 90;
 
+            DataGridViewTextBoxColumn advice = new DataGridViewTextBoxColumn();
+            advice.Name = "Advice";
+            advice.HeaderText = "建议";
+            advice.ReadOnly = true;
+            advice.FillWeight = 13F;
+            advice.MinimumWidth = 88;
+
             DataGridViewTextBoxColumn files = new DataGridViewTextBoxColumn();
             files.Name = "Files";
             files.HeaderText = "数量";
             files.ReadOnly = true;
-            files.FillWeight = 12F;
-            files.MinimumWidth = 70;
+            files.FillWeight = 9F;
+            files.MinimumWidth = 64;
 
             DataGridViewTextBoxColumn note = new DataGridViewTextBoxColumn();
             note.Name = "Note";
             note.HeaderText = "说明";
             note.ReadOnly = true;
-            note.FillWeight = 38F;
-            note.MinimumWidth = 260;
+            note.FillWeight = 31F;
+            note.MinimumWidth = 220;
 
             _grid.Columns.Add(select);
             _grid.Columns.Add(title);
             _grid.Columns.Add(size);
+            _grid.Columns.Add(advice);
             _grid.Columns.Add(files);
             _grid.Columns.Add(note);
+            _grid.CellValueChanged += delegate(object sender, DataGridViewCellEventArgs e)
+            {
+                if (e.RowIndex >= 0 && e.ColumnIndex == _grid.Columns["Selected"].Index)
+                {
+                    UpdateSelectionSummary();
+                }
+            };
+            _grid.CurrentCellDirtyStateChanged += delegate
+            {
+                if (_grid.IsCurrentCellDirty)
+                {
+                    _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+                }
+            };
             gridCard.Controls.Add(_grid);
             root.Controls.Add(gridCard, 0, 2);
 
@@ -2480,6 +2619,14 @@ namespace PcManagerLite
                 row.Cells["Selected"].Value = category.DefaultSelected;
                 row.Cells["Title"].Value = category.Title;
                 row.Cells["Size"].Value = Format.Bytes(category.SizeBytes);
+                row.Cells["Advice"].Value = category.Recommendation;
+                row.Cells["Advice"].ToolTipText = category.RecommendationNote;
+                row.Cells["Advice"].Style.ForeColor =
+                    category.Recommendation == "不建议清理"
+                        ? Palette.Danger
+                        : category.Recommendation == "谨慎清理"
+                            ? Palette.Warning
+                            : Palette.Success;
                 row.Cells["Files"].Value = category.FileCount;
                 row.Cells["Note"].Value = category.Description;
                 if (category.BrowserRunning)
@@ -2498,9 +2645,30 @@ namespace PcManagerLite
                 : result.Error;
             _summary.ForeColor = result.Error == null ? Palette.Muted : Palette.Danger;
             _cleanButton.Enabled = result.TotalBytes > 0;
+            UpdateSelectionSummary();
         }
 
-        private void Scan()
+        private void UpdateSelectionSummary()
+        {
+            if (_categories == null || _busy)
+            {
+                return;
+            }
+            List<CleanupCategory> selected = GetSelectedCategories();
+            long bytes = 0;
+            foreach (CleanupCategory category in selected)
+            {
+                bytes += category.SizeBytes;
+            }
+            _summary.Text = String.Format(
+                "已选 {0} 项，预计释放 {1}；绿色为建议清理，橙色需谨慎，红色不建议清理。",
+                selected.Count,
+                Format.Bytes(bytes));
+            _summary.ForeColor = selected.Count > 0 ? Palette.Muted : Palette.Warning;
+            _cleanButton.Enabled = selected.Count > 0;
+        }
+
+        public void Scan()
         {
             if (_busy)
             {
@@ -5287,9 +5455,12 @@ namespace PcManagerLite
         private readonly Button _updateButton;
         private readonly Button _stopButton;
         private readonly Button _openButton;
+        private readonly System.Windows.Forms.Timer _scanTimer;
         private bool _busy;
         private bool _loading;
         private bool _cancelRequested;
+        private DateTime _scanStarted;
+        private string _scanPrefix = "";
         private DateTime _lastRefresh = DateTime.MinValue;
 
         public SecurityPage()
@@ -5389,6 +5560,24 @@ namespace PcManagerLite
             _progress.Visible = false;
             statusPanel.Controls.Add(_status);
             statusPanel.Controls.Add(_progress);
+
+            _scanTimer = new System.Windows.Forms.Timer();
+            _scanTimer.Interval = 1000;
+            _scanTimer.Tick += delegate
+            {
+                if (!_busy)
+                {
+                    return;
+                }
+                int seconds = (int)Math.Max(
+                    0,
+                    (DateTime.Now - _scanStarted).TotalSeconds);
+                _status.Text = String.Format(
+                    "{0} 已运行 {1} 分 {2} 秒，请保持电脑通电。",
+                    _scanPrefix,
+                    seconds / 60,
+                    seconds % 60);
+            };
 
             actionLayout.Controls.Add(buttons, 0, 0);
             actionLayout.Controls.Add(statusPanel, 1, 0);
@@ -5574,7 +5763,12 @@ namespace PcManagerLite
 
             _busy = true;
             _cancelRequested = false;
-            SetBusy(true, quick ? "正在快速扫描系统关键位置…" : "正在扫描 " + path + " …");
+            _scanStarted = DateTime.Now;
+            _scanPrefix = quick
+                ? "正在快速扫描系统关键位置…"
+                : "正在扫描所选文件夹…";
+            SetBusy(true, _scanPrefix);
+            _scanTimer.Start();
             ThreadPool.QueueUserWorkItem(delegate
             {
                 DefenderScanResult result = DefenderService.Scan(
@@ -5582,18 +5776,12 @@ namespace PcManagerLite
                     path,
                     delegate(string line)
                     {
-                        string text = line.Length > 110 ? line.Substring(0, 110) : line;
-                        SafeBeginInvoke(delegate
-                        {
-                            if (!_cancelRequested)
-                            {
-                                _status.Text = text;
-                            }
-                        });
+                        FileLogger.Write("Defender: " + line);
                     });
                 SafeBeginInvoke(delegate
                 {
                     _busy = false;
+                    _scanTimer.Stop();
                     SetBusy(false, null);
                     ShowScanResult(result);
                     RefreshState(true);
@@ -7387,7 +7575,12 @@ namespace PcManagerLite
                         page,
                         "settings",
                         StringComparison.OrdinalIgnoreCase);
-                    DateTime deadline = DateTime.UtcNow.AddSeconds(settingsPage ? 4 : 2.5);
+                    bool cleanupPage = String.Equals(
+                        page,
+                        "cleanup",
+                        StringComparison.OrdinalIgnoreCase);
+                    DateTime deadline = DateTime.UtcNow.AddSeconds(
+                        settingsPage ? 4 : cleanupPage ? 8 : 2.5);
                     while (DateTime.UtcNow < deadline)
                     {
                         Application.DoEvents();

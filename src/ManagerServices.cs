@@ -439,6 +439,8 @@ namespace PcManagerLite
         public string Id;
         public string Title;
         public string Description;
+        public string Recommendation = "建议清理";
+        public string RecommendationNote = "可安全清理，删除后会自动重建或重新下载。";
         public bool DefaultSelected;
         public bool IsRecycleBin;
         public bool TopLevelPatterns;
@@ -872,7 +874,52 @@ namespace PcManagerLite
             recycle.IsRecycleBin = true;
             categories.Add(recycle);
 
+            foreach (CleanupCategory category in categories)
+            {
+                ApplyRecommendation(category);
+            }
             return categories;
+        }
+
+        private static void ApplyRecommendation(CleanupCategory category)
+        {
+            switch (category.Id)
+            {
+                case "directx-shader-cache":
+                case "gpu-shader-caches":
+                    category.Recommendation = "谨慎清理";
+                    category.RecommendationNote =
+                        "首次进入游戏会重新编译着色器，可能短暂卡顿；只在排查卡顿时清理。";
+                    break;
+                case "recycle-bin":
+                    category.Recommendation = "谨慎清理";
+                    category.RecommendationNote =
+                        "删除后无法恢复，请先确认回收站里没有需要的文件。";
+                    break;
+                case "windows-old":
+                    category.Recommendation = "不建议清理";
+                    category.RecommendationNote =
+                        "这是系统回滚文件；确认不再退回旧版本时再手动勾选。";
+                    break;
+                case "developer-caches":
+                    category.Recommendation = "谨慎清理";
+                    category.RecommendationNote =
+                        "会删除 pip/npm/NuGet/Yarn 下载缓存，下次安装依赖需要重新下载。";
+                    break;
+                case "memory-dumps":
+                    category.Recommendation = "建议清理";
+                    category.RecommendationNote =
+                        "只有需要分析蓝屏原因时才保留这些转储文件。";
+                    break;
+                default:
+                    if (category.BrowserRunning)
+                    {
+                        category.Recommendation = "谨慎清理";
+                        category.RecommendationNote =
+                            "浏览器正在运行，建议关闭浏览器后再清理，否则部分文件会被跳过。";
+                    }
+                    break;
+            }
         }
 
         private static void AddBrowserCacheRoots(List<string> roots, string userData)
@@ -5509,6 +5556,335 @@ namespace PcManagerLite
                 return -1;
             }
         }
+    }
+
+    internal sealed class MemorySnapshot
+    {
+        public long TotalBytes;
+        public long AvailableBytes;
+        public long SystemCacheBytes;
+        public long CommitBytes;
+    }
+
+    internal sealed class MemoryCleanResult
+    {
+        public bool Success;
+        public long BeforeAvailable;
+        public long AfterAvailable;
+        public long FreedBytes;
+        public int TrimmedProcesses;
+        public bool WorkingSetsCleared;
+        public bool ModifiedListFlushed;
+        public bool StandbyListPurged;
+        public string Error;
+    }
+
+    internal static class MemoryOptimizer
+    {
+        private const int SystemMemoryListInformation = 0x50;
+        private const int MemoryEmptyWorkingSets = 2;
+        private const int MemoryFlushModifiedList = 3;
+        private const int MemoryPurgeStandbyList = 4;
+
+        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const uint PROCESS_SET_QUOTA = 0x0100;
+
+        private const uint TOKEN_ADJUST_PRIVILEGES = 0x0020;
+        private const uint TOKEN_QUERY = 0x0008;
+        private const uint SE_PRIVILEGE_ENABLED = 0x0002;
+
+        public static MemorySnapshot GetSnapshot()
+        {
+            MemorySnapshot snapshot = new MemorySnapshot();
+            try
+            {
+                MEMORYSTATUSEX status = new MEMORYSTATUSEX();
+                status.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+                if (GlobalMemoryStatusEx(ref status))
+                {
+                    snapshot.TotalBytes = (long)status.ullTotalPhys;
+                    snapshot.AvailableBytes = (long)status.ullAvailPhys;
+                }
+                PERFORMANCE_INFORMATION info = new PERFORMANCE_INFORMATION();
+                info.cb = (uint)Marshal.SizeOf(typeof(PERFORMANCE_INFORMATION));
+                if (GetPerformanceInfo(ref info, info.cb))
+                {
+                    snapshot.SystemCacheBytes = (long)info.SystemCache.ToUInt64();
+                    snapshot.CommitBytes = (long)info.Committed.ToUInt64() *
+                        (long)info.PageSize.ToUInt64();
+                }
+            }
+            catch
+            {
+            }
+            return snapshot;
+        }
+
+        public static MemoryCleanResult Clean(Action<string> progress)
+        {
+            MemoryCleanResult result = new MemoryCleanResult();
+            try
+            {
+                MemorySnapshot before = GetSnapshot();
+                result.BeforeAvailable = before.AvailableBytes;
+
+                EnablePrivilege("SeProfileSingleProcessPrivilege");
+                EnablePrivilege("SeIncreaseQuotaPrivilege");
+                EnablePrivilege("SeDebugPrivilege");
+
+                if (progress != null)
+                {
+                    progress("正在清空进程工作集…");
+                }
+                int command = MemoryEmptyWorkingSets;
+                result.WorkingSetsCleared =
+                    NtSetSystemInformation(
+                        SystemMemoryListInformation,
+                        ref command,
+                        sizeof(int)) == 0;
+                if (!result.WorkingSetsCleared)
+                {
+                    result.TrimmedProcesses = TrimProcesses();
+                    result.WorkingSetsCleared = result.TrimmedProcesses > 0;
+                }
+
+                if (progress != null)
+                {
+                    progress("正在刷新已修改页面…");
+                }
+                command = MemoryFlushModifiedList;
+                result.ModifiedListFlushed =
+                    NtSetSystemInformation(
+                        SystemMemoryListInformation,
+                        ref command,
+                        sizeof(int)) == 0;
+
+                if (progress != null)
+                {
+                    progress("正在清空待机列表…");
+                }
+                command = MemoryPurgeStandbyList;
+                result.StandbyListPurged =
+                    NtSetSystemInformation(
+                        SystemMemoryListInformation,
+                        ref command,
+                        sizeof(int)) == 0;
+
+                NativeSystem.TrimCurrentProcessWorkingSet();
+                MemorySnapshot after = GetSnapshot();
+                result.AfterAvailable = after.AvailableBytes;
+                result.FreedBytes = Math.Max(
+                    0,
+                    result.AfterAvailable - result.BeforeAvailable);
+                result.Success = result.WorkingSetsCleared ||
+                    result.ModifiedListFlushed ||
+                    result.StandbyListPurged;
+
+                if (progress != null)
+                {
+                    progress("正在重新读取内存状态…");
+                }
+                FileLogger.Write(String.Format(
+                    "内存加速: 释放 {0}, 工作集={1}, 修改页={2}, 待机={3}, 进程={4}",
+                    Format.Bytes(result.FreedBytes),
+                    result.WorkingSetsCleared,
+                    result.ModifiedListFlushed,
+                    result.StandbyListPurged,
+                    result.TrimmedProcesses));
+                if (!result.Success)
+                {
+                    result.Error = "系统拒绝了内存整理请求，请以管理员权限运行。";
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Error = ex.Message;
+                FileLogger.Write("内存加速失败: " + ex);
+            }
+            return result;
+        }
+
+        private static int TrimProcesses()
+        {
+            int count = 0;
+            try
+            {
+                foreach (Process process in Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (process.Id <= 4)
+                        {
+                            continue;
+                        }
+                        IntPtr handle = OpenProcess(
+                            PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA,
+                            false,
+                            process.Id);
+                        if (handle != IntPtr.Zero)
+                        {
+                            if (EmptyWorkingSet(handle))
+                            {
+                                count++;
+                            }
+                            CloseHandle(handle);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return count;
+        }
+
+        private static bool EnablePrivilege(string name)
+        {
+            IntPtr token = IntPtr.Zero;
+            try
+            {
+                if (!OpenProcessToken(
+                    GetCurrentProcess(),
+                    TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                    out token))
+                {
+                    return false;
+                }
+                LUID luid;
+                if (!LookupPrivilegeValue(null, name, out luid))
+                {
+                    return false;
+                }
+                TOKEN_PRIVILEGES privileges = new TOKEN_PRIVILEGES();
+                privileges.PrivilegeCount = 1;
+                privileges.Luid = luid;
+                privileges.Attributes = (int)SE_PRIVILEGE_ENABLED;
+                bool ok = AdjustTokenPrivileges(
+                    token,
+                    false,
+                    ref privileges,
+                    0,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                return ok && Marshal.GetLastWin32Error() == 0;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (token != IntPtr.Zero)
+                {
+                    CloseHandle(token);
+                }
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PERFORMANCE_INFORMATION
+        {
+            public uint cb;
+            public UIntPtr CommitTotal;
+            public UIntPtr CommitLimit;
+            public UIntPtr Committed;
+            public UIntPtr PhysicalTotal;
+            public UIntPtr PhysicalAvailable;
+            public UIntPtr SystemCache;
+            public UIntPtr KernelTotal;
+            public UIntPtr KernelPaged;
+            public UIntPtr KernelNonpaged;
+            public UIntPtr PageSize;
+            public uint HandleCount;
+            public uint ProcessCount;
+            public uint ThreadCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LUID
+        {
+            public uint LowPart;
+            public int HighPart;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct TOKEN_PRIVILEGES
+        {
+            public int PrivilegeCount;
+            public LUID Luid;
+            public int Attributes;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX status);
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool GetPerformanceInfo(
+            ref PERFORMANCE_INFORMATION info,
+            uint size);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtSetSystemInformation(
+            int infoClass,
+            ref int info,
+            int length);
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool EmptyWorkingSet(IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(
+            uint access,
+            bool inherit,
+            int processId);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(
+            IntPtr process,
+            uint access,
+            out IntPtr token);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool LookupPrivilegeValue(
+            string system,
+            string name,
+            out LUID luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool AdjustTokenPrivileges(
+            IntPtr token,
+            bool disableAll,
+            ref TOKEN_PRIVILEGES newState,
+            int bufferLength,
+            IntPtr previousState,
+            IntPtr returnLength);
     }
 
     internal sealed class DefenderStatus

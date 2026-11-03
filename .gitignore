@@ -8,3 +8,5 @@ dist/*.pdb
 dist/*.xml
 
 dist/*.old
+
+dist/*.bak
