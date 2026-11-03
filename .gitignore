@@ -6,3 +6,5 @@ obj/
 work/
 dist/*.pdb
 dist/*.xml
+
+dist/*.old

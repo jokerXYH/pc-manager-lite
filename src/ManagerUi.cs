@@ -11,11 +11,13 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("电脑管家 Lite")]
-[assembly: System.Reflection.AssemblyDescription("轻量的清理、游戏加速与网络修复工具")]
+[assembly: System.Reflection.AssemblyDescription("轻量清理、软件管理、安全防护与游戏加速工具")]
 [assembly: System.Reflection.AssemblyProduct("电脑管家 Lite")]
-[assembly: System.Reflection.AssemblyCompany("Local")]
-[assembly: System.Reflection.AssemblyVersion("2.4.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.4.0.0")]
+[assembly: System.Reflection.AssemblyCompany("Joker X")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 Joker X")]
+[assembly: System.Reflection.AssemblyTrademark("jokerx.top")]
+[assembly: System.Reflection.AssemblyVersion("2.5.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.5.0.0")]
 
 namespace PcManagerLite
 {
@@ -582,6 +584,7 @@ namespace PcManagerLite
         Dashboard,
         Cleanup,
         Programs,
+        Security,
         Game,
         Space,
         SystemInfo,
@@ -596,6 +599,7 @@ namespace PcManagerLite
         Home,
         Cleanup,
         Programs,
+        Shield,
         Game,
         Disk,
         Info,
@@ -615,6 +619,7 @@ namespace PcManagerLite
         private DashboardPage _dashboardPage;
         private CleanupPage _cleanupPage;
         private ProgramsPage _programsPage;
+        private SecurityPage _securityPage;
         private SpacePage _spacePage;
         private SystemInfoPage _systemInfoPage;
         private GamePage _gamePage;
@@ -694,6 +699,7 @@ namespace PcManagerLite
             _dashboardPage = new DashboardPage();
             _cleanupPage = new CleanupPage();
             _programsPage = new ProgramsPage();
+            _securityPage = new SecurityPage();
             _spacePage = new SpacePage();
             _systemInfoPage = new SystemInfoPage();
             _gamePage = new GamePage(this);
@@ -705,6 +711,7 @@ namespace PcManagerLite
             _pages[ManagerView.Dashboard] = _dashboardPage;
             _pages[ManagerView.Cleanup] = _cleanupPage;
             _pages[ManagerView.Programs] = _programsPage;
+            _pages[ManagerView.Security] = _securityPage;
             _pages[ManagerView.Space] = _spacePage;
             _pages[ManagerView.SystemInfo] = _systemInfoPage;
             _pages[ManagerView.Game] = _gamePage;
@@ -805,6 +812,10 @@ namespace PcManagerLite
             {
                 _programsPage.EnsureLoaded();
             }
+            if (view == ManagerView.Security)
+            {
+                _securityPage.RefreshState();
+            }
             if (view == ManagerView.Space)
             {
                 _spacePage.RefreshDrives();
@@ -857,6 +868,10 @@ namespace PcManagerLite
             else if (page.Equals("system", StringComparison.OrdinalIgnoreCase))
             {
                 Navigate(ManagerView.SystemInfo);
+            }
+            else if (page.Equals("security", StringComparison.OrdinalIgnoreCase))
+            {
+                Navigate(ManagerView.Security);
             }
             else if (page.Equals("game", StringComparison.OrdinalIgnoreCase))
             {
@@ -963,12 +978,13 @@ namespace PcManagerLite
 
             Panel nav = new Panel();
             nav.Dock = DockStyle.Top;
-            nav.Height = 496;
+            nav.Height = 544;
             nav.Padding = new Padding(10, 6, 10, 0);
 
             AddSidebarButton(nav, ManagerView.Dashboard, "首页体检", NavIconKind.Home);
             AddSidebarButton(nav, ManagerView.Cleanup, "垃圾清理", NavIconKind.Cleanup);
             AddSidebarButton(nav, ManagerView.Programs, "软件管理", NavIconKind.Programs);
+            AddSidebarButton(nav, ManagerView.Security, "安全防护", NavIconKind.Shield);
             AddSidebarButton(nav, ManagerView.Game, "游戏加速", NavIconKind.Game);
             AddSidebarButton(nav, ManagerView.Space, "空间分析", NavIconKind.Disk);
             AddSidebarButton(nav, ManagerView.SystemInfo, "系统信息", NavIconKind.Info);
@@ -1347,6 +1363,24 @@ namespace PcManagerLite
                         graphics.DrawEllipse(pen, box.Left + 2, box.Top + 2, 14, 14);
                         graphics.DrawLine(pen, box.Left + 9, box.Top + 5, box.Left + 9, box.Top + 6);
                         graphics.DrawLine(pen, box.Left + 9, box.Top + 8, box.Left + 9, box.Top + 13);
+                    }
+                    else if (kind == NavIconKind.Shield)
+                    {
+                        graphics.DrawPolygon(pen, new Point[]
+                        {
+                            new Point(box.Left + 9, box.Top + 1),
+                            new Point(box.Right - 2, box.Top + 4),
+                            new Point(box.Right - 2, box.Top + 9),
+                            new Point(box.Left + 9, box.Bottom - 1),
+                            new Point(box.Left + 2, box.Top + 9),
+                            new Point(box.Left + 2, box.Top + 4)
+                        });
+                        graphics.DrawLines(pen, new Point[]
+                        {
+                            new Point(box.Left + 6, box.Top + 9),
+                            new Point(box.Left + 8, box.Top + 12),
+                            new Point(box.Left + 12, box.Top + 6)
+                        });
                     }
                     else if (kind == NavIconKind.Startup)
                     {
@@ -2296,7 +2330,7 @@ namespace PcManagerLite
             summaryLayout.ColumnCount = 2;
             summaryLayout.RowCount = 2;
             summaryLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            summaryLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 300F));
+            summaryLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 430F));
             summaryLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 65F));
             summaryLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 35F));
 
@@ -2342,8 +2376,17 @@ namespace PcManagerLite
             _scanButton.Width = 102;
             _scanButton.Click += delegate { Scan(); };
 
+            Button selectAll = Ui.CreateButton("全选", false);
+            selectAll.Width = 68;
+            selectAll.Click += delegate { SelectAll(false); };
+            Button recommended = Ui.CreateButton("推荐项", false);
+            recommended.Width = 80;
+            recommended.Click += delegate { SelectAll(true); };
+
             buttons.Controls.Add(_cleanButton);
             buttons.Controls.Add(_scanButton);
+            buttons.Controls.Add(selectAll);
+            buttons.Controls.Add(recommended);
 
             _progress = new ProgressBar();
             _progress.Dock = DockStyle.Fill;
@@ -2537,6 +2580,25 @@ namespace PcManagerLite
             });
         }
 
+        private void SelectAll(bool recommended)
+        {
+            if (_busy || _categories == null)
+            {
+                return;
+            }
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                CleanupCategory category = row.Tag as CleanupCategory;
+                if (category == null)
+                {
+                    continue;
+                }
+                row.Cells["Selected"].Value = recommended
+                    ? category.DefaultSelected
+                    : true;
+            }
+        }
+
         private void SetBusy(bool busy, string text)
         {
             _grid.Enabled = !busy;
@@ -2608,6 +2670,7 @@ namespace PcManagerLite
         private readonly CheckBox _minimizeOption;
         private readonly Button _optimizeButton;
         private readonly Button _scanButton;
+        private readonly Button _cleanCacheButton;
         private readonly Button _restoreButton;
         private readonly Label _summary;
         private List<ProcessGroup> _groups;
@@ -2859,7 +2922,7 @@ namespace PcManagerLite
 
             FlowLayoutPanel buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Right;
-            buttons.Width = 460;
+            buttons.Width = 580;
             buttons.FlowDirection = FlowDirection.RightToLeft;
             buttons.WrapContents = false;
 
@@ -2871,12 +2934,17 @@ namespace PcManagerLite
             _scanButton.Width = 96;
             _scanButton.Click += delegate { Scan(); };
 
+            _cleanCacheButton = Ui.CreateButton("清理游戏缓存", false);
+            _cleanCacheButton.Width = 118;
+            _cleanCacheButton.Click += delegate { CleanGameCaches(); };
+
             _restoreButton = Ui.CreateButton("恢复系统设置", false);
             _restoreButton.Width = 112;
             _restoreButton.Click += delegate { RestoreSettings(); };
 
             buttons.Controls.Add(_optimizeButton);
             buttons.Controls.Add(_scanButton);
+            buttons.Controls.Add(_cleanCacheButton);
             buttons.Controls.Add(_restoreButton);
             actions.Controls.Add(buttons);
             actions.Resize += delegate
@@ -3228,6 +3296,42 @@ namespace PcManagerLite
             });
         }
 
+        private void CleanGameCaches()
+        {
+            if (_busy)
+            {
+                return;
+            }
+            _busy = true;
+            SetBusy(true);
+            _summary.Text = "正在清理 DirectX 与显卡着色器缓存…";
+            _summary.ForeColor = Palette.AccentDark;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                CleanupResult result = CleanupScanner.CleanCategories(
+                    new string[] { "directx-shader-cache", "gpu-shader-caches" },
+                    delegate(string text)
+                    {
+                        SafeBeginInvoke(delegate { _summary.Text = text; });
+                    });
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    SetBusy(false);
+                    _summary.Text = result.Error == null
+                        ? String.Format(
+                            "游戏缓存清理完成：{0} 个文件，释放约 {1}。",
+                            result.DeletedFiles,
+                            Format.Bytes(result.DeletedBytes))
+                        : "清理游戏缓存失败：" + result.Error;
+                    _summary.ForeColor = result.Error == null
+                        ? Palette.Success
+                        : Palette.Danger;
+                    _owner.UpdateKnownSystemState();
+                });
+            });
+        }
+
         private void RestoreSettings()
         {
             BackupStore backup = BackupStore.Load();
@@ -3273,6 +3377,7 @@ namespace PcManagerLite
             _grid.Enabled = !busy;
             _optimizeButton.Enabled = !busy;
             _scanButton.Enabled = !busy;
+            _cleanCacheButton.Enabled = !busy;
             _restoreButton.Enabled = !busy;
             _systemOptions.Enabled = !busy;
             _pageFileOption.Enabled = !busy && SystemOptimizer.CanMovePageFileToD();
@@ -4135,16 +4240,26 @@ namespace PcManagerLite
                 ContentAlignment.TopLeft);
             aboutTitle.Dock = DockStyle.Fill;
             Label aboutText = Ui.Label(
-                "软件更新只从 jokerx.top 获取，不依赖 GitHub 代理。源码与历史版本可从 GitHub 仓库查看。",
+                "软件更新只从 jokerx.top 获取，不依赖 GitHub 代理。程序未签名，如 SmartScreen 提示风险，可核对发布页的 SHA-256 或提交误报。",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.TopLeft);
             aboutText.Dock = DockStyle.Fill;
             LinkLabel links = new LinkLabel();
             links.Dock = DockStyle.Fill;
-            links.Text = "jokerx.top 软件管理    GitHub 源码";
-            links.Links.Add(0, 20, "https://jokerx.top/projects/software/index.html");
-            links.Links.Add(22, links.Text.Length - 22, "https://github.com/jokerXYH/pc-manager-lite");
+            links.Text = "jokerx.top 软件管理    GitHub 源码    Microsoft 误报提交";
+            links.Links.Add(
+                links.Text.IndexOf("jokerx.top"),
+                "jokerx.top".Length,
+                "https://jokerx.top/projects/software/index.html");
+            links.Links.Add(
+                links.Text.IndexOf("GitHub 源码"),
+                "GitHub 源码".Length,
+                "https://github.com/jokerXYH/pc-manager-lite");
+            links.Links.Add(
+                links.Text.IndexOf("Microsoft 误报提交"),
+                "Microsoft 误报提交".Length,
+                "https://www.microsoft.com/en-us/wdsi/filesubmission");
             links.LinkColor = Palette.Accent;
             links.ActiveLinkColor = Palette.AccentHover;
             links.LinkClicked += delegate(object sender, LinkLabelLinkClickedEventArgs e)
@@ -5159,6 +5274,430 @@ namespace PcManagerLite
         }
     }
 
+    internal sealed class SecurityPage : UserControl
+    {
+        private readonly Label _realtimeValue;
+        private readonly Label _signatureValue;
+        private readonly Label _scanValue;
+        private readonly Label _status;
+        private readonly DataGridView _grid;
+        private readonly ProgressBar _progress;
+        private readonly Button _quickButton;
+        private readonly Button _customButton;
+        private readonly Button _updateButton;
+        private readonly Button _stopButton;
+        private readonly Button _openButton;
+        private bool _busy;
+        private bool _loading;
+        private bool _cancelRequested;
+        private DateTime _lastRefresh = DateTime.MinValue;
+
+        public SecurityPage()
+        {
+            BackColor = Palette.Canvas;
+
+            TableLayoutPanel root = new TableLayoutPanel();
+            root.Dock = DockStyle.Fill;
+            root.ColumnCount = 1;
+            root.RowCount = 5;
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 106F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86F));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            Controls.Add(root);
+
+            root.Controls.Add(
+                Ui.BuildPageHeader(
+                    "安全防护",
+                    "调用 Windows Defender 检查系统安全，不常驻后台、不加载病毒库",
+                    "刷新状态",
+                    delegate { RefreshState(true); }),
+                0,
+                0);
+
+            TableLayoutPanel stats = new TableLayoutPanel();
+            stats.Dock = DockStyle.Fill;
+            stats.Margin = new Padding(0, 0, 0, 12);
+            stats.ColumnCount = 3;
+            stats.RowCount = 1;
+            stats.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            for (int i = 0; i < 3; i++)
+            {
+                stats.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+            }
+            _realtimeValue = Ui.BuildStatCard(stats, 0, "实时保护", "读取中", Palette.Success);
+            _signatureValue = Ui.BuildStatCard(stats, 1, "病毒库版本", "读取中", Palette.Accent);
+            _scanValue = Ui.BuildStatCard(stats, 2, "上次快速扫描", "读取中", Palette.Warning);
+            root.Controls.Add(stats, 0, 1);
+
+            RoundedPanel actions = new RoundedPanel();
+            actions.Dock = DockStyle.Fill;
+            actions.Margin = new Padding(0, 0, 0, 12);
+            actions.Padding = new Padding(14, 10, 14, 9);
+
+            TableLayoutPanel actionLayout = new TableLayoutPanel();
+            actionLayout.Dock = DockStyle.Fill;
+            actionLayout.ColumnCount = 2;
+            actionLayout.RowCount = 1;
+            actionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 600F));
+            actionLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            actionLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Fill;
+            buttons.FlowDirection = FlowDirection.LeftToRight;
+            buttons.WrapContents = false;
+            buttons.Margin = new Padding(0);
+
+            _quickButton = Ui.CreateButton("快速扫描", true);
+            _quickButton.Width = 104;
+            _quickButton.Click += delegate { StartScan(true); };
+            _customButton = Ui.CreateButton("自定义扫描", false);
+            _customButton.Width = 108;
+            _customButton.Click += delegate { StartScan(false); };
+            _updateButton = Ui.CreateButton("更新病毒库", false);
+            _updateButton.Width = 108;
+            _updateButton.Click += delegate { UpdateSignatures(); };
+            _stopButton = Ui.CreateButton("停止扫描", false);
+            _stopButton.Width = 90;
+            _stopButton.Enabled = false;
+            _stopButton.Click += delegate { StopScan(); };
+            _openButton = Ui.CreateButton("Windows 安全中心", false);
+            _openButton.Width = 132;
+            _openButton.Click += delegate { DefenderService.OpenWindowsSecurity(); };
+            buttons.Controls.Add(_quickButton);
+            buttons.Controls.Add(_customButton);
+            buttons.Controls.Add(_updateButton);
+            buttons.Controls.Add(_stopButton);
+            buttons.Controls.Add(_openButton);
+
+            Panel statusPanel = new Panel();
+            statusPanel.Dock = DockStyle.Fill;
+            statusPanel.Margin = new Padding(10, 0, 0, 0);
+            _status = Ui.Label(
+                "正在读取 Windows Defender 状态…",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            _status.Dock = DockStyle.Fill;
+            _progress = new ProgressBar();
+            _progress.Dock = DockStyle.Bottom;
+            _progress.Height = 4;
+            _progress.Style = ProgressBarStyle.Marquee;
+            _progress.Visible = false;
+            statusPanel.Controls.Add(_status);
+            statusPanel.Controls.Add(_progress);
+
+            actionLayout.Controls.Add(buttons, 0, 0);
+            actionLayout.Controls.Add(statusPanel, 1, 0);
+            actions.Controls.Add(actionLayout);
+            root.Controls.Add(actions, 0, 2);
+
+            RoundedPanel gridCard = new RoundedPanel();
+            gridCard.Dock = DockStyle.Fill;
+            gridCard.Margin = new Padding(0, 0, 0, 12);
+            gridCard.Padding = new Padding(12);
+            _grid = new DataGridView();
+            _grid.Dock = DockStyle.Fill;
+            Ui.StyleGrid(_grid);
+            _grid.ReadOnly = true;
+
+            DataGridViewTextBoxColumn time = new DataGridViewTextBoxColumn();
+            time.Name = "Time";
+            time.HeaderText = "检测时间";
+            time.FillWeight = 16F;
+            time.MinimumWidth = 118;
+
+            DataGridViewTextBoxColumn threat = new DataGridViewTextBoxColumn();
+            threat.Name = "Threat";
+            threat.HeaderText = "威胁名称";
+            threat.FillWeight = 30F;
+            threat.MinimumWidth = 180;
+
+            DataGridViewTextBoxColumn severity = new DataGridViewTextBoxColumn();
+            severity.Name = "Severity";
+            severity.HeaderText = "级别";
+            severity.FillWeight = 10F;
+            severity.MinimumWidth = 64;
+
+            DataGridViewTextBoxColumn state = new DataGridViewTextBoxColumn();
+            state.Name = "State";
+            state.HeaderText = "状态";
+            state.FillWeight = 12F;
+            state.MinimumWidth = 78;
+
+            DataGridViewTextBoxColumn file = new DataGridViewTextBoxColumn();
+            file.Name = "File";
+            file.HeaderText = "相关文件";
+            file.FillWeight = 32F;
+            file.MinimumWidth = 200;
+
+            _grid.Columns.Add(time);
+            _grid.Columns.Add(threat);
+            _grid.Columns.Add(severity);
+            _grid.Columns.Add(state);
+            _grid.Columns.Add(file);
+            gridCard.Controls.Add(_grid);
+            root.Controls.Add(gridCard, 0, 3);
+
+            Label note = Ui.Label(
+                "扫描由 Windows Defender 执行，本工具只负责发起任务和展示结果；Defender 的病毒库和扫描引擎常驻内存由系统管理。",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            note.Dock = DockStyle.Fill;
+            root.Controls.Add(note, 0, 4);
+
+            Load += delegate { RefreshState(false); };
+        }
+
+        public void RefreshState()
+        {
+            RefreshState(false);
+        }
+
+        public void RefreshState(bool force)
+        {
+            if (_busy || _loading)
+            {
+                return;
+            }
+            if (!force && _lastRefresh != DateTime.MinValue &&
+                DateTime.Now - _lastRefresh < TimeSpan.FromSeconds(60))
+            {
+                return;
+            }
+            _loading = true;
+            _status.Text = "正在读取 Windows Defender 状态…";
+            _status.ForeColor = Palette.Muted;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                DefenderStatus status = DefenderService.ReadStatus();
+                List<DefenderThreat> threats = DefenderService.ReadThreats();
+                bool engine = !String.IsNullOrWhiteSpace(DefenderService.FindMpCmdRun());
+                SafeBeginInvoke(delegate { ApplyStatus(status, threats, engine); });
+            });
+        }
+
+        private void ApplyStatus(
+            DefenderStatus status,
+            List<DefenderThreat> threats,
+            bool engineAvailable)
+        {
+            _loading = false;
+            _lastRefresh = DateTime.Now;
+
+            bool available = status.Available && String.IsNullOrWhiteSpace(status.Error);
+            _realtimeValue.Text = available
+                ? (status.RealTimeProtectionEnabled ? "已开启" : "已关闭")
+                : "不可用";
+            _realtimeValue.ForeColor = available && status.RealTimeProtectionEnabled
+                ? Palette.Success
+                : Palette.Danger;
+            _signatureValue.Text = available && !String.IsNullOrWhiteSpace(status.SignatureVersion)
+                ? status.SignatureVersion
+                : "不可用";
+            _scanValue.Text = status.LastQuickScan.HasValue
+                ? status.LastQuickScan.Value.ToString("MM-dd HH:mm")
+                : "暂无记录";
+
+            _grid.Rows.Clear();
+            foreach (DefenderThreat threat in threats)
+            {
+                int index = _grid.Rows.Add();
+                DataGridViewRow row = _grid.Rows[index];
+                row.Cells["Time"].Value = threat.DetectedAt.HasValue
+                    ? threat.DetectedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                    : "—";
+                row.Cells["Threat"].Value = threat.Name;
+                row.Cells["Severity"].Value = threat.Severity;
+                row.Cells["State"].Value = threat.Status;
+                row.Cells["File"].Value = String.IsNullOrWhiteSpace(threat.Resources)
+                    ? "—"
+                    : threat.Resources;
+                row.Cells["File"].ToolTipText = threat.Resources;
+                row.Cells["Severity"].Style.ForeColor =
+                    String.Equals(threat.Severity, "严重", StringComparison.Ordinal) ||
+                    String.Equals(threat.Severity, "高", StringComparison.Ordinal)
+                        ? Palette.Danger
+                        : Palette.Warning;
+            }
+
+            _quickButton.Enabled = engineAvailable && available && !_busy;
+            _customButton.Enabled = engineAvailable && available && !_busy;
+            _updateButton.Enabled = engineAvailable && available && !_busy;
+
+            if (!available)
+            {
+                _status.Text = String.IsNullOrWhiteSpace(status.Error)
+                    ? "无法读取 Windows Defender 状态，可能由第三方杀毒软件接管。"
+                    : "无法读取 Windows Defender 状态：" + status.Error;
+                _status.ForeColor = Palette.Warning;
+                return;
+            }
+
+            string signatureDate = status.SignatureUpdated.HasValue
+                ? "，更新于 " + status.SignatureUpdated.Value.ToString("MM-dd HH:mm")
+                : String.Empty;
+            _status.Text = String.Format(
+                "实时保护{0}；扫描在后台进行，可继续使用电脑。历史威胁记录 {1} 条{2}。",
+                status.RealTimeProtectionEnabled ? "已开启" : "已关闭",
+                threats.Count,
+                signatureDate);
+            _status.ForeColor = status.RealTimeProtectionEnabled
+                ? Palette.Muted
+                : Palette.Warning;
+        }
+
+        private void StartScan(bool quick)
+        {
+            if (_busy)
+            {
+                return;
+            }
+            string path = null;
+            if (!quick)
+            {
+                using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+                {
+                    dialog.Description = "选择要交给 Windows Defender 扫描的文件夹";
+                    dialog.ShowNewFolderButton = false;
+                    if (dialog.ShowDialog(this) != DialogResult.OK)
+                    {
+                        return;
+                    }
+                    path = dialog.SelectedPath;
+                }
+            }
+
+            _busy = true;
+            _cancelRequested = false;
+            SetBusy(true, quick ? "正在快速扫描系统关键位置…" : "正在扫描 " + path + " …");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                DefenderScanResult result = DefenderService.Scan(
+                    quick,
+                    path,
+                    delegate(string line)
+                    {
+                        string text = line.Length > 110 ? line.Substring(0, 110) : line;
+                        SafeBeginInvoke(delegate
+                        {
+                            if (!_cancelRequested)
+                            {
+                                _status.Text = text;
+                            }
+                        });
+                    });
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    SetBusy(false, null);
+                    ShowScanResult(result);
+                    RefreshState(true);
+                });
+            });
+        }
+
+        private void ShowScanResult(DefenderScanResult result)
+        {
+            if (_cancelRequested)
+            {
+                _status.Text = "扫描已停止。";
+                _status.ForeColor = Palette.Warning;
+                return;
+            }
+            if (!String.IsNullOrWhiteSpace(result.Error))
+            {
+                _status.Text = "扫描失败：" + result.Error;
+                _status.ForeColor = Palette.Danger;
+                return;
+            }
+            if (result.ExitCode == 0)
+            {
+                _status.Text = "扫描完成，未发现威胁。";
+                _status.ForeColor = Palette.Success;
+                return;
+            }
+            if (result.ExitCode == 2)
+            {
+                _status.Text = "扫描完成，发现并处理了威胁，请查看下方记录或打开 Windows 安全中心。";
+                _status.ForeColor = Palette.Warning;
+                return;
+            }
+            _status.Text = "扫描结束，退出代码 " + result.ExitCode + "，建议打开 Windows 安全中心查看详情。";
+            _status.ForeColor = Palette.Warning;
+        }
+
+        private void StopScan()
+        {
+            if (DefenderService.CancelScan())
+            {
+                _cancelRequested = true;
+                _status.Text = "正在停止扫描…";
+                _status.ForeColor = Palette.Warning;
+            }
+            else
+            {
+                _status.Text = "当前没有正在运行的扫描。";
+                _status.ForeColor = Palette.Muted;
+            }
+        }
+
+        private void UpdateSignatures()
+        {
+            if (_busy)
+            {
+                return;
+            }
+            _busy = true;
+            SetBusy(true, "正在更新 Windows Defender 病毒库…");
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string message;
+                bool success = DefenderService.UpdateSignatures(out message);
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    SetBusy(false, null);
+                    _status.Text = message;
+                    _status.ForeColor = success ? Palette.Success : Palette.Warning;
+                    RefreshState(true);
+                });
+            });
+        }
+
+        private void SetBusy(bool busy, string text)
+        {
+            _quickButton.Enabled = !busy;
+            _customButton.Enabled = !busy;
+            _updateButton.Enabled = !busy;
+            _stopButton.Enabled = busy;
+            _progress.Visible = busy;
+            if (!String.IsNullOrWhiteSpace(text))
+            {
+                _status.Text = text;
+                _status.ForeColor = Palette.AccentDark;
+            }
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
     internal sealed class ProgramsPage : UserControl
     {
         private readonly DataGridView _grid;
@@ -5168,10 +5707,13 @@ namespace PcManagerLite
         private readonly Label _uninstallableValue;
         private readonly Label _sizeValue;
         private readonly Button _uninstallButton;
+        private readonly Button _forceButton;
         private readonly Button _openButton;
         private List<InstalledProgram> _programs = new List<InstalledProgram>();
+        private string _actionMessage;
         private bool _loading;
         private bool _loaded;
+        private bool _busyAction;
 
         public ProgramsPage()
         {
@@ -5281,14 +5823,22 @@ namespace PcManagerLite
             DataGridViewTextBoxColumn installed = new DataGridViewTextBoxColumn();
             installed.Name = "Installed";
             installed.HeaderText = "安装日期";
-            installed.FillWeight = 14F;
+            installed.FillWeight = 12F;
             installed.MinimumWidth = 92;
+
+            DataGridViewTextBoxColumn state = new DataGridViewTextBoxColumn();
+            state.Name = "State";
+            state.HeaderText = "状态";
+            state.ReadOnly = true;
+            state.FillWeight = 12F;
+            state.MinimumWidth = 90;
 
             _grid.Columns.Add(name);
             _grid.Columns.Add(publisher);
             _grid.Columns.Add(version);
             _grid.Columns.Add(size);
             _grid.Columns.Add(installed);
+            _grid.Columns.Add(state);
             gridCard.Controls.Add(_grid);
             root.Controls.Add(gridCard, 0, 3);
 
@@ -5307,7 +5857,7 @@ namespace PcManagerLite
 
             FlowLayoutPanel buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Right;
-            buttons.Width = 300;
+            buttons.Width = 430;
             buttons.FlowDirection = FlowDirection.RightToLeft;
             buttons.WrapContents = false;
 
@@ -5315,11 +5865,23 @@ namespace PcManagerLite
             _uninstallButton.Width = 108;
             _uninstallButton.Enabled = false;
             _uninstallButton.Click += delegate { UninstallSelected(); };
+            _forceButton = Ui.CreateButton("强制移除", false);
+            _forceButton.Width = 96;
+            _forceButton.Enabled = false;
+            _forceButton.ForeColor = Palette.Danger;
+            _forceButton.EnabledChanged += delegate
+            {
+                _forceButton.ForeColor = _forceButton.Enabled
+                    ? Palette.Danger
+                    : Palette.Muted;
+            };
+            _forceButton.Click += delegate { ForceRemoveSelected(); };
             _openButton = Ui.CreateButton("打开安装目录", false);
             _openButton.Width = 124;
             _openButton.Enabled = false;
             _openButton.Click += delegate { OpenLocation(); };
             buttons.Controls.Add(_uninstallButton);
+            buttons.Controls.Add(_forceButton);
             buttons.Controls.Add(_openButton);
             actions.Controls.Add(buttons);
             actions.Resize += delegate
@@ -5344,6 +5906,7 @@ namespace PcManagerLite
             }
             _loading = true;
             _uninstallButton.Enabled = false;
+            _forceButton.Enabled = false;
             _openButton.Enabled = false;
             _status.Text = "正在读取注册表中的已安装程序…";
             _status.ForeColor = Palette.Muted;
@@ -5415,15 +5978,36 @@ namespace PcManagerLite
                 row.Cells["Installed"].Value = String.IsNullOrWhiteSpace(program.InstallDate)
                     ? "—"
                     : program.InstallDate;
+                if (program.UninstallerMissing)
+                {
+                    row.Cells["State"].Value = "卸载器缺失";
+                    row.Cells["State"].Style.ForeColor = Palette.Danger;
+                }
+                else if (!program.CanUninstall)
+                {
+                    row.Cells["State"].Value = "无卸载命令";
+                    row.Cells["State"].Style.ForeColor = Palette.Warning;
+                }
+                else
+                {
+                    row.Cells["State"].Value = "可卸载";
+                    row.Cells["State"].Style.ForeColor = Palette.Success;
+                }
                 row.Cells["Name"].ToolTipText = program.Name;
                 shown++;
             }
             if (_loaded)
             {
-                _status.Text = String.Format(
+                string message = String.Format(
                     "共 {0} 个程序，当前显示 {1} 个；卸载会调用程序自带卸载器。",
                     _programs.Count,
                     shown);
+                if (!String.IsNullOrWhiteSpace(_actionMessage))
+                {
+                    message = _actionMessage + " " + message;
+                    _actionMessage = null;
+                }
+                _status.Text = message;
                 _status.ForeColor = Palette.Muted;
             }
             UpdateButtons();
@@ -5435,12 +6019,18 @@ namespace PcManagerLite
             if (_uninstallButton != null)
             {
                 _uninstallButton.Enabled = !_loading &&
+                    !_busyAction &&
                     program != null &&
-                    program.CanUninstall;
+                    program.CanUninstall &&
+                    !program.UninstallerMissing;
+            }
+            if (_forceButton != null)
+            {
+                _forceButton.Enabled = !_loading && !_busyAction && program != null;
             }
             if (_openButton != null)
             {
-                _openButton.Enabled = program != null &&
+                _openButton.Enabled = !_loading && !_busyAction && program != null &&
                     !String.IsNullOrWhiteSpace(program.InstallLocation) &&
                     Directory.Exists(program.InstallLocation);
             }
@@ -5473,17 +6063,116 @@ namespace PcManagerLite
             {
                 return;
             }
-            string error;
-            if (InstalledProgramService.LaunchUninstall(program, out error))
+            UninstallLaunchResult launch = InstalledProgramService.LaunchUninstall(program);
+            if (!launch.Started)
             {
-                _status.Text = "已启动卸载程序，完成后点击「刷新列表」查看结果。";
+                _status.Text = "无法启动卸载程序：" + launch.Error;
+                _status.ForeColor = Palette.Danger;
+                return;
+            }
+
+            SetProgramsBusy(true);
+            _status.Text = "已启动「" + program.Name + "」的卸载程序，正在等待其结束…";
+            _status.ForeColor = Palette.AccentDark;
+            int processId = launch.ProcessId;
+            string name = program.Name;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                bool exited = false;
+                try
+                {
+                    Process process = Process.GetProcessById(processId);
+                    exited = process.WaitForExit(15 * 60 * 1000);
+                    if (exited)
+                    {
+                        process.WaitForExit();
+                    }
+                }
+                catch
+                {
+                    exited = true;
+                }
+                SafeBeginInvoke(delegate
+                {
+                    SetProgramsBusy(false);
+                    _actionMessage = exited
+                        ? "「" + name + "」的卸载程序已退出；如果它仍在列表中，可尝试「强制移除」。"
+                        : "「" + name + "」的卸载程序仍在运行，可稍后刷新列表。";
+                    _loaded = false;
+                    ScanPrograms();
+                });
+            });
+        }
+
+        private void ForceRemoveSelected()
+        {
+            InstalledProgram program = SelectedProgram();
+            if (program == null)
+            {
+                return;
+            }
+            DialogResult confirm = MessageBox.Show(
+                this,
+                "强制移除只删除注册表中的卸载登记，不会运行程序自带的卸载器。\n\n" +
+                "程序：" + program.Name + "\n" +
+                "发布者：" + (String.IsNullOrWhiteSpace(program.Publisher) ? "未知" : program.Publisher) +
+                "\n\n确定继续吗？",
+                "强制移除",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (confirm != DialogResult.Yes)
+            {
+                return;
+            }
+
+            bool deleteFolder = false;
+            if (!String.IsNullOrWhiteSpace(program.InstallLocation) &&
+                Directory.Exists(program.InstallLocation))
+            {
+                DialogResult folder = MessageBox.Show(
+                    this,
+                    "是否同时删除安装目录？\n\n" + program.InstallLocation +
+                    "\n\n选择「否」只移除注册表登记，文件会保留。",
+                    "删除安装目录",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (folder == DialogResult.Cancel)
+                {
+                    return;
+                }
+                deleteFolder = folder == DialogResult.Yes;
+            }
+
+            string message;
+            if (InstalledProgramService.ForceRemove(program, deleteFolder, out message))
+            {
+                _actionMessage = message;
+                _status.Text = message;
                 _status.ForeColor = Palette.Success;
+                _loaded = false;
+                ScanPrograms();
             }
             else
             {
-                _status.Text = "无法启动卸载程序：" + error;
+                _status.Text = message;
                 _status.ForeColor = Palette.Danger;
             }
+        }
+
+        private void SetProgramsBusy(bool busy)
+        {
+            _busyAction = busy;
+            if (_search != null)
+            {
+                _search.Enabled = !busy;
+            }
+            if (_grid != null)
+            {
+                _grid.Enabled = !busy;
+            }
+            UpdateButtons();
         }
 
         private void OpenLocation()
@@ -6471,6 +7160,14 @@ namespace PcManagerLite
                     "Scheduled cleanup task present: " +
                     ScheduledCleanupService.IsEnabled());
 
+                DefenderStatus defender = DefenderService.ReadStatus();
+                report.AppendLine(
+                    "Defender: available=" + defender.Available +
+                    ", realtime=" + defender.RealTimeProtectionEnabled +
+                    ", signature=" + defender.SignatureVersion +
+                    ", engine=" + (DefenderService.FindMpCmdRun() ?? "not found") +
+                    ", error=" + (defender.Error ?? "none"));
+
                 BackupStore backup = BackupStore.Load();
                 report.AppendLine("Restorable system backup present: " + backup.HasSettings);
 
@@ -6663,6 +7360,19 @@ namespace PcManagerLite
                 if (!String.IsNullOrWhiteSpace(theme))
                 {
                     screenshotSettings.Theme = theme;
+                }
+                string[] screenshotArguments = Environment.GetCommandLineArgs();
+                for (int i = 0; i < screenshotArguments.Length - 1; i++)
+                {
+                    if (String.Equals(
+                        screenshotArguments[i],
+                        "--accent",
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        screenshotSettings.Accent = Palette.NormalizeAccent(
+                            screenshotArguments[i + 1]);
+                        Palette.ApplyAccent(screenshotSettings.Accent);
+                    }
                 }
                 using (MainForm form = new MainForm(screenshotSettings, false))
                 {

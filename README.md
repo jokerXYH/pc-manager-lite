@@ -1,14 +1,20 @@
+<p align="center"><img src="assets/app-1024.png" width="96" alt="电脑管家 Lite 图标"></p>
+
 # 电脑管家 Lite
 
 一个面向 Windows 10/11 的轻量单文件电脑管家。功能集中在垃圾清理、游戏加速、通用帧时间诊断、网络修复、启动项管理和系统设置恢复。
 
 官网下载页：[jokerx.top · 软件管理](https://jokerx.top/projects/software/index.html)
 
-当前版本：`2.4.0`
+当前版本：`2.5.0`
 
 ## 截图
 
 ![首页体检](docs/screenshots/dashboard.png)
+
+![软件管理](docs/screenshots/programs.png)
+
+![安全防护](docs/screenshots/security.png)
 
 ![游戏加速](docs/screenshots/game.png)
 
@@ -18,11 +24,12 @@
 
 - **内置更新**：只从 `jokerx.top` 检查、下载和校验更新，不经过 GitHub 代理；安装前验证 SHA-256，检查超时会自动结束。
 - **主题与启动**：支持跟随系统、浅色、深色主题并即时切换，5 种强调色可选，以及可随时撤销的 Windows 开机自启动。
-- **垃圾清理**：用户/Windows 临时文件、Windows 更新缓存、错误报告、缩略图、DirectX 与显卡着色器缓存、浏览器缓存、回收站；支持每周自动清理计划任务。
-- **软件管理**：读取注册表中的已安装程序，显示发布者、版本、大小和安装日期，支持搜索、打开安装目录和调用程序自带卸载器。
+- **垃圾清理**：用户/Windows 临时文件、更新缓存、错误报告、缩略图、DirectX 与显卡缓存、浏览器缓存、系统日志、传递优化缓存、内存转储、开发工具缓存、可选 Windows.old 和回收站；支持全选/推荐项和一键清理，可配置每周自动清理。
+- **软件管理**：读取已安装程序，显示发布者、版本、大小、安装日期和卸载器状态；支持搜索、打开安装目录、调用自带卸载器、等待卸载结束并自动刷新，卸载器缺失时可强制移除登记信息和（可选）安装目录。
+- **安全防护**：读取 Windows Defender 实时保护、病毒库和扫描状态，支持快速扫描、自定义文件夹扫描、更新病毒库、查看历史威胁并跳转 Windows 安全中心；本工具不常驻、不加载病毒库，内存占用接近零。
 - **空间分析**：磁盘占用卡片 + 大文件扫描（只读），按大小排序，可直接打开所在位置。
 - **系统信息**：处理器、显卡、内存条、磁盘、系统版本和开机时长的一屏概览。
-- **游戏加速**：识别 Steam 游戏和前台全屏游戏，选择性关闭后台程序，优化 Game Mode、Game DVR 和电源计划。
+- **游戏加速**：识别 Steam 游戏和前台全屏游戏，选择性关闭后台程序，优化 Game Mode、Game DVR 和电源计划，并可单独清理 DirectX/显卡着色器缓存。
 - **帧时间诊断**：调用本机已安装的 Intel PresentMon，统计平均 FPS、1% Low、平均帧时与卡顿次数。
 - **网络修复**：检测网关、互联网延迟、丢包、抖动和 DNS，支持缓存刷新与 Winsock/TCP-IP 重置。
 - **启动项管理**：扫描注册表 Run、启动文件夹和第三方自动服务，可禁用并恢复，支持关键字过滤。
@@ -40,7 +47,7 @@
 - 无遥测、无账号、无后台常驻监控。
 - 开机自启动默认关闭，只能在设置页主动开启。
 
-功能按钮点击后立即执行，不再弹出二次确认。清理范围、启动项勾选状态和系统选项会直接决定本次操作。只有「卸载程序」会弹出一次确认，因为之后由第三方卸载器接管。
+功能按钮点击后立即执行，不再弹出二次确认。清理范围、启动项勾选状态和系统选项会直接决定本次操作。只有「卸载程序」「强制移除」会弹出确认：卸载会交给第三方卸载器接管；强制移除会删除注册表卸载登记，删除安装目录还需要单独确认。
 
 ## 系统要求
 
@@ -55,7 +62,28 @@
 - 版本信息：[version.js](https://jokerx.top/downloads/pc-manager-lite/version.js)
 - GitHub Releases 同样提供可执行文件。
 
-程序未签名，首次运行可能出现 SmartScreen“未知发布者”。请以本仓库和 `jokerx.top` 的 SHA-256 信息为准。
+## Windows 提示“风险”怎么办
+
+程序使用 .NET Framework 单文件发布，**没有购买商业代码签名证书**，所以 SmartScreen 和部分杀毒软件会对新版本给出“未知发布者/风险”提示。这不是程序行为异常，主要取决于文件信誉和签名状态。
+
+可以这样确认文件没有被篡改：
+
+1. 打开 `https://jokerx.top/downloads/pc-manager-lite/version.js`，记下 `sha256`。
+2. 本地执行 `Get-FileHash .\pc-manager-lite.exe -Algorithm SHA256`，两者一致即可。
+3. GitHub Release 的 `pc-manager-lite.exe` 资产也带有 GitHub 计算的 SHA-256。
+4. 也可以把 SHA-256 粘贴到 [VirusTotal](https://www.virustotal.com/gui/home/search) 查看多家引擎的扫描结果。
+
+如果确认是误报，可以到 [Microsoft 文件误报提交](https://www.microsoft.com/en-us/wdsi/filesubmission) 上传该文件，通常 1–3 个工作日会更新签名库。
+
+要彻底消除 SmartScreen 提示，需要 OV/EV 代码签名证书。构建脚本已预留签名入口：
+
+```powershell
+$env:SIGN_PFX = "C:\path\cert.pfx"
+$env:SIGN_PASSWORD = "证书密码"
+powershell -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+设置后会自动调用 Windows SDK 的 `signtool.exe` 做 SHA-256 时间戳签名；没有证书时脚本会跳过签名。
 
 ## 从源码构建
 

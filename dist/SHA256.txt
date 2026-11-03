@@ -1,1 +1,1 @@
-8d0117dd03877d30b66e9aa112bc37b4b16b099fd29fc6ac3b63573e77015e3c  pc-manager-lite.exe
+46cff6ef1788a1ed6db5d98ed9b4b5670041f91869d4bf4fd54820a8f1463d13  pc-manager-lite.exe

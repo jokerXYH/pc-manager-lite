@@ -785,6 +785,85 @@ namespace PcManagerLite
                     @"Google\Chrome\User Data"));
             categories.Add(chrome);
 
+            CleanupCategory systemLogs = new CleanupCategory(
+                "system-logs",
+                "系统日志与安装记录",
+                "CBS、DISM、Windows 更新等诊断日志；排查系统问题时才需要",
+                true);
+            systemLogs.MinimumAgeHours = 24;
+            systemLogs.TopLevelPatterns = true;
+            systemLogs.Patterns = new string[] { "*.log", "*.etl", "*.cab" };
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Logs\CBS"));
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Logs\DISM"));
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Logs\WindowsUpdate"));
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Logs\SIH"));
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Logs\waasmedic"));
+            AddUniqueDirectory(systemLogs.Roots, Path.Combine(windows, @"Panther"));
+            categories.Add(systemLogs);
+
+            CleanupCategory deliveryOptimization = new CleanupCategory(
+                "delivery-optimization",
+                "传递优化缓存",
+                "Windows 更新和商店的分发缓存，删除后系统会按需重新下载",
+                true);
+            AddUniqueDirectory(
+                deliveryOptimization.Roots,
+                Path.Combine(windows, @"SoftwareDistribution\DeliveryOptimization"));
+            AddUniqueDirectory(
+                deliveryOptimization.Roots,
+                Path.Combine(
+                    windows,
+                    @"ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache"));
+            categories.Add(deliveryOptimization);
+
+            CleanupCategory memoryDumps = new CleanupCategory(
+                "memory-dumps",
+                "内存转储文件",
+                "蓝屏或程序崩溃生成的转储；删除后无法再分析那次崩溃",
+                true);
+            memoryDumps.MinimumAgeHours = 24;
+            memoryDumps.TopLevelPatterns = true;
+            memoryDumps.Patterns = new string[] { "*.dmp" };
+            AddUniqueDirectory(memoryDumps.Roots, Path.Combine(windows, "Minidump"));
+            categories.Add(memoryDumps);
+
+            bool firefoxRunning = IsProcessRunning("firefox");
+            CleanupCategory firefox = new CleanupCategory(
+                "firefox-cache",
+                "Mozilla Firefox 缓存",
+                firefoxRunning
+                    ? "Firefox 正在运行，默认不勾选；关闭浏览器后清理更完整"
+                    : "网页图片和脚本缓存，不包含密码、书签和历史记录",
+                !firefoxRunning);
+            firefox.BrowserRunning = firefoxRunning;
+            AddMozillaCacheRoots(firefox.Roots, Path.Combine(local, @"Mozilla\Firefox\Profiles"));
+            categories.Add(firefox);
+
+            CleanupCategory developerCaches = new CleanupCategory(
+                "developer-caches",
+                "开发工具缓存",
+                "pip、npm、NuGet、Yarn 的下载缓存；下次安装依赖时会重新下载",
+                false);
+            AddUniqueDirectory(developerCaches.Roots, Path.Combine(local, @"pip\Cache"));
+            AddUniqueDirectory(
+                developerCaches.Roots,
+                Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "npm-cache"));
+            AddUniqueDirectory(developerCaches.Roots, Path.Combine(local, @"NuGet\v3-cache"));
+            AddUniqueDirectory(developerCaches.Roots, Path.Combine(local, @"Yarn\Cache"));
+            categories.Add(developerCaches);
+
+            CleanupCategory windowsOld = new CleanupCategory(
+                "windows-old",
+                "旧版 Windows 安装文件",
+                "升级后保留的回滚文件，体积通常很大；删除后无法回退到旧版本",
+                false);
+            windowsOld.MinimumAgeHours = 0;
+            AddUniqueDirectory(windowsOld.Roots, Path.Combine(@"C:\", "Windows.old"));
+            categories.Add(windowsOld);
+
             CleanupCategory recycle = new CleanupCategory(
                 "recycle-bin",
                 "回收站",
@@ -819,6 +898,51 @@ namespace PcManagerLite
             catch
             {
             }
+        }
+
+        private static void AddMozillaCacheRoots(List<string> roots, string profilesRoot)
+        {
+            if (!Directory.Exists(profilesRoot))
+            {
+                return;
+            }
+            try
+            {
+                foreach (string profile in Directory.GetDirectories(profilesRoot))
+                {
+                    AddUniqueDirectory(roots, Path.Combine(profile, "cache2"));
+                    AddUniqueDirectory(roots, Path.Combine(profile, "startupCache"));
+                    AddUniqueDirectory(roots, Path.Combine(profile, "thumbnails"));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        public static CleanupResult CleanCategories(
+            string[] categoryIds,
+            Action<string> progress)
+        {
+            List<CleanupCategory> selected = new List<CleanupCategory>();
+            if (categoryIds != null && categoryIds.Length > 0)
+            {
+                foreach (CleanupCategory category in BuildCategories())
+                {
+                    foreach (string id in categoryIds)
+                    {
+                        if (String.Equals(
+                            category.Id,
+                            id,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            selected.Add(category);
+                            break;
+                        }
+                    }
+                }
+            }
+            return CleanSelected(selected, progress);
         }
 
         private static void AddUniqueDirectory(List<string> roots, string path)
@@ -4338,6 +4462,18 @@ namespace PcManagerLite
         public string InstallDate;
         public long SizeBytes;
         public bool CanUninstall;
+        public bool UninstallerMissing;
+        public RegistryHive Hive;
+        public RegistryView View;
+        public string KeyName;
+    }
+
+    internal sealed class UninstallLaunchResult
+    {
+        public bool Started;
+        public int ProcessId;
+        public string Error;
+        public string ExecutablePath;
     }
 
     internal static class InstalledProgramService
@@ -4367,39 +4503,191 @@ namespace PcManagerLite
             return items;
         }
 
-        public static bool LaunchUninstall(InstalledProgram program, out string error)
+        public static UninstallLaunchResult LaunchUninstall(InstalledProgram program)
         {
-            error = String.Empty;
+            UninstallLaunchResult result = new UninstallLaunchResult();
             if (program == null || String.IsNullOrWhiteSpace(program.UninstallString))
             {
-                error = "该程序没有提供卸载命令。";
-                return false;
+                result.Error = "该程序没有提供卸载命令，可尝试强制移除登记信息。";
+                return result;
             }
             try
             {
                 string command = program.UninstallString.Trim();
-                if (String.IsNullOrWhiteSpace(command))
-                {
-                    error = "卸载命令为空。";
-                    return false;
-                }
                 command = Regex.Replace(
                     command,
                     @"(msiexec(?:\.exe)?\s+)/I",
                     "$1/X",
                     RegexOptions.IgnoreCase);
+
+                string fileName;
+                string arguments;
+                bool direct = TrySplitCommand(command, out fileName, out arguments);
+                if (direct && IsScriptFile(fileName))
+                {
+                    arguments = "/c \"" + command + "\"";
+                    fileName = "cmd.exe";
+                    direct = true;
+                }
+
                 ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = "cmd.exe";
-                startInfo.Arguments = "/c " + command;
+                if (direct)
+                {
+                    startInfo.FileName = fileName;
+                    startInfo.Arguments = arguments;
+                    result.ExecutablePath = fileName;
+                }
+                else
+                {
+                    startInfo.FileName = "cmd.exe";
+                    startInfo.Arguments = "/c " + command;
+                    result.ExecutablePath = "cmd.exe";
+                }
                 startInfo.UseShellExecute = false;
-                startInfo.CreateNoWindow = true;
-                Process.Start(startInfo);
-                return true;
+                startInfo.WorkingDirectory = Environment.GetFolderPath(
+                    Environment.SpecialFolder.System);
+                if (direct && Path.IsPathRooted(fileName))
+                {
+                    try
+                    {
+                        string directory = Path.GetDirectoryName(fileName);
+                        if (!String.IsNullOrWhiteSpace(directory) &&
+                            Directory.Exists(directory))
+                        {
+                            startInfo.WorkingDirectory = directory;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+                using (Process process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                    {
+                        result.Error = "卸载程序没有成功启动。";
+                        return result;
+                    }
+                    result.Started = true;
+                    result.ProcessId = process.Id;
+                }
+                return result;
             }
             catch (Exception ex)
             {
-                error = ex.Message;
+                result.Error = ex.Message;
+                FileLogger.Write("启动卸载程序失败: " + program.Name + " / " + ex);
+                return result;
+            }
+        }
+
+        public static bool ForceRemove(
+            InstalledProgram program,
+            bool deleteInstallFolder,
+            out string message)
+        {
+            message = String.Empty;
+            if (program == null || String.IsNullOrWhiteSpace(program.KeyName))
+            {
+                message = "没有可删除的注册表卸载项。";
                 return false;
+            }
+            try
+            {
+                using (RegistryKey baseKey = RegistryKey.OpenBaseKey(program.Hive, program.View))
+                using (RegistryKey uninstall = baseKey.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                    true))
+                {
+                    if (uninstall == null)
+                    {
+                        message = "无法打开卸载登记表。";
+                        return false;
+                    }
+                    uninstall.DeleteSubKeyTree(program.KeyName, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                message = "删除注册表卸载项失败：" + ex.Message;
+                FileLogger.Write("强制移除失败: " + program.Name + " / " + ex);
+                return false;
+            }
+
+            string folderMessage = String.Empty;
+            if (deleteInstallFolder)
+            {
+                SafeDeleteInstallFolder(program, out folderMessage);
+            }
+            message = String.Format(
+                "已移除「{0}」的卸载登记{1}。",
+                program.Name,
+                String.IsNullOrWhiteSpace(folderMessage) ? "" : "；" + folderMessage);
+            FileLogger.Write("强制移除程序: " + program.Name + " / " + message);
+            return true;
+        }
+
+        private static void SafeDeleteInstallFolder(
+            InstalledProgram program,
+            out string message)
+        {
+            message = String.Empty;
+            string raw = program.InstallLocation;
+            if (String.IsNullOrWhiteSpace(raw))
+            {
+                message = "安装目录未登记，未删除文件";
+                return;
+            }
+            try
+            {
+                string full = Path.GetFullPath(raw.Trim().Trim('"')).TrimEnd('\\');
+                string root = Path.GetPathRoot(full);
+                if (String.IsNullOrWhiteSpace(root) ||
+                    String.Equals(
+                        full.TrimEnd('\\'),
+                        root.TrimEnd('\\'),
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !Directory.Exists(full))
+                {
+                    message = "安装目录不可用，未删除文件";
+                    return;
+                }
+                string[] protectedPaths =
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + @"\Downloads"
+                };
+                foreach (string protectedPath in protectedPaths)
+                {
+                    if (!String.IsNullOrWhiteSpace(protectedPath) &&
+                        String.Equals(
+                            full.TrimEnd('\\'),
+                            protectedPath.TrimEnd('\\'),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        message = "安装目录属于系统目录，未删除文件";
+                        return;
+                    }
+                }
+                if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+                {
+                    message = "安装目录是符号链接，未删除文件";
+                    return;
+                }
+                Directory.Delete(full, true);
+                message = "已删除安装目录";
+            }
+            catch (Exception ex)
+            {
+                message = "删除安装目录失败：" + ex.Message;
             }
         }
 
@@ -4484,6 +4772,11 @@ namespace PcManagerLite
                             program.SizeBytes = sizeKb > 0 ? sizeKb * 1024L : 0L;
                             program.CanUninstall =
                                 !String.IsNullOrWhiteSpace(program.UninstallString);
+                            program.Hive = hive;
+                            program.View = view;
+                            program.KeyName = subKeyName;
+                            program.UninstallerMissing =
+                                IsUninstallerMissing(program.UninstallString);
                             found[key] = program;
                         }
                     }
@@ -4531,6 +4824,75 @@ namespace PcManagerLite
             {
                 return 0L;
             }
+        }
+
+        private static bool TrySplitCommand(
+            string command,
+            out string fileName,
+            out string arguments)
+        {
+            fileName = String.Empty;
+            arguments = String.Empty;
+            if (String.IsNullOrWhiteSpace(command))
+            {
+                return false;
+            }
+            command = command.Trim();
+            if (command.StartsWith("\"", StringComparison.Ordinal))
+            {
+                int end = command.IndexOf('"', 1);
+                if (end > 0)
+                {
+                    fileName = command.Substring(1, end - 1).Trim();
+                    arguments = command.Substring(end + 1).Trim();
+                    return fileName.Length > 0;
+                }
+            }
+            int exe = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            if (exe > 0)
+            {
+                int cut = exe + 4;
+                fileName = command.Substring(0, cut).Trim().Trim('"');
+                arguments = command.Substring(cut).Trim();
+                if (fileName.Equals("msiexec.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    fileName = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System),
+                        "msiexec.exe");
+                }
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsScriptFile(string fileName)
+        {
+            if (String.IsNullOrWhiteSpace(fileName))
+            {
+                return false;
+            }
+            string extension = Path.GetExtension(fileName);
+            return extension.Equals(".bat", StringComparison.OrdinalIgnoreCase) ||
+                extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsUninstallerMissing(string command)
+        {
+            if (String.IsNullOrWhiteSpace(command))
+            {
+                return false;
+            }
+            string fileName;
+            string arguments;
+            if (!TrySplitCommand(command, out fileName, out arguments))
+            {
+                return false;
+            }
+            if (fileName.IndexOf(':') < 0 && fileName.IndexOf('\\') < 0)
+            {
+                return false;
+            }
+            return !File.Exists(fileName);
         }
 
         private static string FormatInstallDate(string raw)
@@ -5145,6 +5507,457 @@ namespace PcManagerLite
             catch
             {
                 return -1;
+            }
+        }
+    }
+
+    internal sealed class DefenderStatus
+    {
+        public bool Available;
+        public bool AntivirusEnabled;
+        public bool RealTimeProtectionEnabled;
+        public bool AmServiceEnabled;
+        public string ProductName;
+        public string SignatureVersion;
+        public DateTime? SignatureUpdated;
+        public DateTime? LastQuickScan;
+        public DateTime? LastFullScan;
+        public string Error;
+    }
+
+    internal sealed class DefenderThreat
+    {
+        public long ThreatId;
+        public string Name;
+        public string Severity;
+        public DateTime? DetectedAt;
+        public string Status;
+        public string Resources;
+    }
+
+    internal sealed class DefenderScanResult
+    {
+        public bool Success;
+        public int ExitCode;
+        public string Error;
+    }
+
+    internal static class DefenderService
+    {
+        private static readonly object ScanSync = new object();
+        private static Process _scanProcess;
+
+        public static DefenderStatus ReadStatus()
+        {
+            DefenderStatus status = new DefenderStatus();
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    @"\\.\root\Microsoft\Windows\Defender",
+                    "SELECT * FROM MSFT_MpComputerStatus"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        status.Available = true;
+                        status.AntivirusEnabled = Bool(item, "AntivirusEnabled");
+                        status.RealTimeProtectionEnabled =
+                            Bool(item, "RealTimeProtectionEnabled");
+                        status.AmServiceEnabled = Bool(item, "AMServiceEnabled");
+                        status.ProductName = Text(item, "AMProductVersion");
+                        status.SignatureVersion =
+                            Text(item, "AntivirusSignatureVersion");
+                        status.SignatureUpdated =
+                            Date(item, "AntivirusSignatureLastUpdated");
+                        status.LastQuickScan = Date(item, "QuickScanEndTime");
+                        status.LastFullScan = Date(item, "FullScanEndTime");
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                status.Error = ex.Message;
+            }
+            return status;
+        }
+
+        public static List<DefenderThreat> ReadThreats()
+        {
+            List<DefenderThreat> threats = new List<DefenderThreat>();
+            Dictionary<long, string> names = new Dictionary<long, string>();
+            Dictionary<long, string> severities = new Dictionary<long, string>();
+            try
+            {
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    @"\\.\root\Microsoft\Windows\Defender",
+                    "SELECT ThreatID, ThreatName, SeverityID FROM MSFT_MpThreat"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        long id = (long)Number(item, "ThreatID");
+                        names[id] = Text(item, "ThreatName");
+                        severities[id] = SeverityName(Number(item, "SeverityID"));
+                    }
+                }
+                using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
+                    @"\\.\root\Microsoft\Windows\Defender",
+                    "SELECT ThreatID, InitialDetectionTime, ThreatStatusID, Resources " +
+                    "FROM MSFT_MpThreatDetection"))
+                {
+                    foreach (ManagementBaseObject item in searcher.Get())
+                    {
+                        DefenderThreat threat = new DefenderThreat();
+                        threat.ThreatId = (long)Number(item, "ThreatID");
+                        threat.DetectedAt = Date(item, "InitialDetectionTime");
+                        threat.Status = StatusName(Number(item, "ThreatStatusID"));
+                        string name;
+                        if (names.TryGetValue(threat.ThreatId, out name))
+                        {
+                            threat.Name = name;
+                        }
+                        else
+                        {
+                            threat.Name = "Threat " + threat.ThreatId;
+                        }
+                        string severity;
+                        if (severities.TryGetValue(threat.ThreatId, out severity))
+                        {
+                            threat.Severity = severity;
+                        }
+                        threat.Resources = FirstResource(item);
+                        threats.Add(threat);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Write("读取 Defender 威胁记录失败: " + ex.Message);
+            }
+            threats.Sort(delegate(DefenderThreat left, DefenderThreat right)
+            {
+                DateTime a = left.DetectedAt ?? DateTime.MinValue;
+                DateTime b = right.DetectedAt ?? DateTime.MinValue;
+                return b.CompareTo(a);
+            });
+            return threats;
+        }
+
+        public static string FindMpCmdRun()
+        {
+            string programFiles = Environment.GetFolderPath(
+                Environment.SpecialFolder.ProgramFiles);
+            string legacy = Path.Combine(programFiles, @"Windows Defender\MpCmdRun.exe");
+            if (File.Exists(legacy))
+            {
+                return legacy;
+            }
+            try
+            {
+                string platform = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    @"Microsoft\Windows Defender\Platform");
+                if (Directory.Exists(platform))
+                {
+                    string best = null;
+                    Version bestVersion = null;
+                    foreach (string directory in Directory.GetDirectories(platform))
+                    {
+                        string candidate = Path.Combine(directory, "MpCmdRun.exe");
+                        if (!File.Exists(candidate))
+                        {
+                            continue;
+                        }
+                        Version version = null;
+                        try
+                        {
+                            version = new Version(Path.GetFileName(directory));
+                        }
+                        catch
+                        {
+                        }
+                        if (best == null ||
+                            (version != null &&
+                             (bestVersion == null || version > bestVersion)))
+                        {
+                            best = candidate;
+                            bestVersion = version;
+                        }
+                    }
+                    return best;
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        public static DefenderScanResult Scan(
+            bool quick,
+            string path,
+            Action<string> progress)
+        {
+            DefenderScanResult result = new DefenderScanResult();
+            string executable = FindMpCmdRun();
+            if (String.IsNullOrWhiteSpace(executable))
+            {
+                result.Error = "未找到 Windows Defender 扫描组件（MpCmdRun.exe）。";
+                return result;
+            }
+            string arguments = quick
+                ? "-Scan -ScanType 1"
+                : "-Scan -ScanType 3 -File \"" + path + "\"";
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = executable;
+                startInfo.Arguments = arguments;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = Encoding.Default;
+                startInfo.StandardErrorEncoding = Encoding.Default;
+
+                Process process = new Process();
+                process.StartInfo = startInfo;
+                process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                {
+                    if (!String.IsNullOrWhiteSpace(e.Data) && progress != null)
+                    {
+                        progress(e.Data.Trim());
+                    }
+                };
+                process.Start();
+                lock (ScanSync)
+                {
+                    _scanProcess = process;
+                }
+                process.BeginOutputReadLine();
+                process.WaitForExit();
+                result.ExitCode = process.ExitCode;
+                result.Success = process.ExitCode == 0;
+                process.Close();
+                FileLogger.Write(String.Format(
+                    "Defender 扫描完成: quick={0}, path={1}, exit={2}",
+                    quick,
+                    String.IsNullOrWhiteSpace(path) ? "-" : path,
+                    result.ExitCode));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                result.Error = ex.Message;
+                FileLogger.Write("Defender 扫描失败: " + ex.Message);
+                return result;
+            }
+            finally
+            {
+                lock (ScanSync)
+                {
+                    _scanProcess = null;
+                }
+            }
+        }
+
+        public static bool UpdateSignatures(out string message)
+        {
+            message = String.Empty;
+            string executable = FindMpCmdRun();
+            if (String.IsNullOrWhiteSpace(executable))
+            {
+                message = "未找到 Windows Defender 组件。";
+                return false;
+            }
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = executable;
+                startInfo.Arguments = "-SignatureUpdate";
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = Encoding.Default;
+                startInfo.StandardErrorEncoding = Encoding.Default;
+                using (Process process = Process.Start(startInfo))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit(180000);
+                    bool ok = process.HasExited && process.ExitCode == 0;
+                    message = ok
+                        ? "病毒库已更新。"
+                        : "病毒库更新未完成：" +
+                          (String.IsNullOrWhiteSpace(output) ? "未知原因" : output.Trim());
+                    return ok;
+                }
+            }
+            catch (Exception ex)
+            {
+                message = ex.Message;
+                return false;
+            }
+        }
+
+        public static bool CancelScan()
+        {
+            lock (ScanSync)
+            {
+                if (_scanProcess == null)
+                {
+                    return false;
+                }
+                try
+                {
+                    if (!_scanProcess.HasExited)
+                    {
+                        _scanProcess.Kill();
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+                return false;
+            }
+        }
+
+        public static void OpenWindowsSecurity()
+        {
+            try
+            {
+                Process.Start("windowsdefender://threat");
+            }
+            catch
+            {
+                try
+                {
+                    Process.Start("ms-settings:windowsdefender");
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static string FirstResource(ManagementBaseObject item)
+        {
+            try
+            {
+                object value = item["Resources"];
+                string[] resources = value as string[];
+                if (resources != null && resources.Length > 0)
+                {
+                    return resources[0];
+                }
+                return Convert.ToString(value);
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static string SeverityName(long severity)
+        {
+            switch ((int)severity)
+            {
+                case 1:
+                    return "低";
+                case 2:
+                    return "中";
+                case 4:
+                    return "高";
+                case 5:
+                    return "严重";
+                default:
+                    return "未知";
+            }
+        }
+
+        private static string StatusName(long status)
+        {
+            switch ((int)status)
+            {
+                case 1:
+                    return "已检测";
+                case 2:
+                    return "已清理";
+                case 3:
+                    return "已隔离";
+                case 4:
+                    return "已移除";
+                case 5:
+                    return "已允许";
+                case 6:
+                    return "已阻止";
+                default:
+                    return "未知";
+            }
+        }
+
+        private static string Text(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                return value == null ? String.Empty : Convert.ToString(value).Trim();
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static bool Bool(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                return value != null && Convert.ToBoolean(value);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static long Number(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                return value == null ? 0L : Convert.ToInt64(value);
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private static DateTime? Date(ManagementBaseObject item, string name)
+        {
+            try
+            {
+                object value = item[name];
+                if (value == null)
+                {
+                    return null;
+                }
+                DateTime parsed;
+                if (value is DateTime)
+                {
+                    parsed = (DateTime)value;
+                }
+                else if (!DateTime.TryParse(Convert.ToString(value), out parsed))
+                {
+                    return null;
+                }
+                return parsed.Year <= 1900 ? (DateTime?)null : parsed;
+            }
+            catch
+            {
+                return null;
             }
         }
     }
