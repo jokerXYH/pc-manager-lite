@@ -2650,7 +2650,11 @@ namespace PcManagerLite
             }
             if (entries.Length == 1 && entries[0].Length >= 2)
             {
-                return entries[0].Substring(0, 2) + " · 系统管理";
+                bool automatic = entries[0].TrimEnd().EndsWith(
+                    " 0 0",
+                    StringComparison.Ordinal);
+                return entries[0].Substring(0, 2) +
+                    (automatic ? " 系统托管" : " 系统管理");
             }
             return entries.Length + " 个页面文件";
         }
