@@ -2999,6 +2999,7 @@ namespace PcManagerLite
 
             FlowLayoutPanel options = new FlowLayoutPanel();
             options.Dock = DockStyle.Fill;
+            options.BackColor = Palette.Card;
             options.FlowDirection = FlowDirection.TopDown;
             options.WrapContents = false;
 

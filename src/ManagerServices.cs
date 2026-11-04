@@ -2641,14 +2641,33 @@ namespace PcManagerLite
                     active[0].Length >= 2 ? active[0].Substring(0, 2) : "",
                     StringComparison.OrdinalIgnoreCase))
             {
-                return active[0].Substring(0, 2) + " 运行中 → " +
-                    entries[0].Substring(0, 2) + " 重启生效";
+                return DescribePageFileDrive(active[0]) + " 运行中 → " +
+                    DescribePageFileDrive(entries[0]) + " 重启生效";
+            }
+            if (entries.Length == 1 && IsSystemManagedPageFile(entries[0]))
+            {
+                return "系统自动管理";
             }
             if (entries.Length == 1 && entries[0].Length >= 2)
             {
                 return entries[0].Substring(0, 2) + " · 系统管理";
             }
             return entries.Length + " 个页面文件";
+        }
+
+        private static bool IsSystemManagedPageFile(string entry)
+        {
+            return !String.IsNullOrEmpty(entry) &&
+                entry.TrimStart().StartsWith("?:", StringComparison.Ordinal);
+        }
+
+        private static string DescribePageFileDrive(string entry)
+        {
+            if (IsSystemManagedPageFile(entry))
+            {
+                return "系统托管";
+            }
+            return entry.Length >= 2 ? entry.Substring(0, 2) : entry;
         }
 
         public static string[] GetActivePageFileEntries()
