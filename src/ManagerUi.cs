@@ -16,8 +16,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyCompany("Joker X")]
 [assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 Joker X")]
 [assembly: System.Reflection.AssemblyTrademark("jokerx.top")]
-[assembly: System.Reflection.AssemblyVersion("2.6.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.6.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.6.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.6.1.0")]
 
 namespace PcManagerLite
 {
@@ -1564,10 +1564,17 @@ namespace PcManagerLite
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             float scale = Ui.ScaleFactor(e.Graphics);
-            int size = Math.Min(Width, Height) - Ui.Scale(e.Graphics, 24);
+            int captionHeight = String.IsNullOrWhiteSpace(_caption)
+                ? 0
+                : Ui.Scale(e.Graphics, 26);
+            int size = Math.Min(Width, Height) - Ui.Scale(e.Graphics, 24) - captionHeight;
+            if (size < Ui.Scale(e.Graphics, 96))
+            {
+                size = Math.Min(Width, Height) - Ui.Scale(e.Graphics, 24);
+            }
             Rectangle ring = new Rectangle(
                 (Width - size) / 2,
-                Ui.Scale(e.Graphics, 10),
+                Ui.Scale(e.Graphics, 8),
                 size,
                 size);
 
@@ -1616,6 +1623,23 @@ namespace PcManagerLite
                     Ui.Scale(e.Graphics, 24)),
                 Palette.Ink,
                 TextFormatFlags.HorizontalCenter);
+            if (!String.IsNullOrWhiteSpace(_caption))
+            {
+                TextRenderer.DrawText(
+                    e.Graphics,
+                    _caption,
+                    Palette.Small,
+                    new Rectangle(
+                        Ui.Scale(e.Graphics, 4),
+                        ring.Bottom + Ui.Scale(e.Graphics, 2),
+                        Width - Ui.Scale(e.Graphics, 8),
+                        Ui.Scale(e.Graphics, 22)),
+                    Palette.Muted,
+                    TextFormatFlags.HorizontalCenter |
+                    TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.WordBreak |
+                    TextFormatFlags.EndEllipsis);
+            }
         }
     }
 
@@ -1687,8 +1711,8 @@ namespace PcManagerLite
                     button.BackColor = button.Enabled
                         ? Palette.Accent
                         : Palette.IsDark
-                            ? Color.FromArgb(49, 72, 97)
-                            : Color.FromArgb(183, 207, 234);
+                            ? Color.FromArgb(49, 61, 72)
+                            : Color.FromArgb(214, 223, 232);
                     button.ForeColor = button.Enabled
                         ? Color.White
                         : Palette.Muted;
@@ -1697,7 +1721,7 @@ namespace PcManagerLite
                 {
                     button.BackColor = button.Enabled
                         ? Palette.Card
-                        : Palette.SoftBlue;
+                        : Palette.Canvas;
                     button.ForeColor = button.Enabled ? Palette.Ink : Palette.Muted;
                 }
             };
@@ -1808,7 +1832,7 @@ namespace PcManagerLite
             {
                 Button button = CreateButton(actionText, true);
                 button.Dock = DockStyle.Fill;
-                button.Margin = new Padding(12, 7, 0, 7);
+                button.Margin = new Padding(12, 15, 0, 15);
                 button.Click += action;
                 panel.Controls.Add(button, 1, 0);
             }
@@ -2999,6 +3023,7 @@ namespace PcManagerLite
 
             FlowLayoutPanel options = new FlowLayoutPanel();
             options.Dock = DockStyle.Fill;
+            options.BackColor = Palette.Card;
             options.FlowDirection = FlowDirection.TopDown;
             options.WrapContents = false;
 
@@ -3739,6 +3764,21 @@ namespace PcManagerLite
             logCard.Margin = new Padding(0, 0, 0, 12);
             logCard.Padding = new Padding(14, 10, 14, 10);
 
+            TableLayoutPanel logLayout = new TableLayoutPanel();
+            logLayout.Dock = DockStyle.Fill;
+            logLayout.ColumnCount = 1;
+            logLayout.RowCount = 2;
+            logLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+            logLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            Label logTitle = Ui.Label(
+                "诊断与修复记录",
+                Palette.BodyBold,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            logTitle.Dock = DockStyle.Fill;
+            logLayout.Controls.Add(logTitle, 0, 0);
+
             _repairLog = new RichTextBox();
             _repairLog.Dock = DockStyle.Fill;
             _repairLog.ReadOnly = true;
@@ -3751,11 +3791,11 @@ namespace PcManagerLite
                 NativeSystem.ApplyControlTheme(_repairLog.Handle, Palette.IsDark, false);
             };
             _repairLog.Text =
-                "网络修复记录\r\n\r\n" +
                 "快速修复：清空 DNS 缓存、刷新 ARP 并重新注册 DNS。\r\n" +
                 "高级修复：重置 Winsock 和 TCP/IP，需要重启电脑。\r\n" +
                 "按钮点击即执行，修复记录会保存在本机。";
-            logCard.Controls.Add(_repairLog);
+            logLayout.Controls.Add(_repairLog, 0, 1);
+            logCard.Controls.Add(logLayout);
             root.Controls.Add(logCard, 0, 3);
 
             Panel actions = new Panel();
@@ -4146,8 +4186,16 @@ namespace PcManagerLite
             _progress.Height = 4;
             _progress.Style = ProgressBarStyle.Marquee;
             _progress.Visible = false;
+            Label notesTitle = Ui.Label(
+                "更新说明",
+                Palette.BodyBold,
+                Palette.Ink,
+                ContentAlignment.MiddleLeft);
+            notesTitle.Dock = DockStyle.Top;
+            notesTitle.Height = 24;
             notesPanel.Controls.Add(_releaseNotes);
             notesPanel.Controls.Add(_progress);
+            notesPanel.Controls.Add(notesTitle);
             updateLayout.Controls.Add(notesPanel, 0, 3);
             updateLayout.SetColumnSpan(notesPanel, 2);
 
@@ -4242,7 +4290,7 @@ namespace PcManagerLite
             themeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250F));
 
             Label themeLabel = Ui.Label(
-                "界面主题（点击立即切换）",
+                "界面主题",
                 Palette.Body,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
@@ -4285,6 +4333,9 @@ namespace PcManagerLite
             themeButtons.Controls.Add(_systemThemeButton);
             themeButtons.Controls.Add(_lightThemeButton);
             themeButtons.Controls.Add(_darkThemeButton);
+            _tips.SetToolTip(_systemThemeButton, "跟随 Windows 应用主题");
+            _tips.SetToolTip(_lightThemeButton, "始终使用浅色界面");
+            _tips.SetToolTip(_darkThemeButton, "始终使用深色界面");
             themeRow.Controls.Add(themeLabel, 0, 0);
             themeRow.Controls.Add(themeButtons, 1, 0);
             preferenceLayout.Controls.Add(themeRow, 0, 3);
@@ -4299,7 +4350,7 @@ namespace PcManagerLite
             accentRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 250F));
 
             Label accentLabel = Ui.Label(
-                "强调色（按钮与高亮颜色）",
+                "强调色",
                 Palette.Body,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
@@ -4708,17 +4759,23 @@ namespace PcManagerLite
             _selfValue = AddStatCard(stats, 2, "本工具自启动", "未注册", Palette.Success);
             root.Controls.Add(stats, 0, 1);
 
-            Panel toolbar = new Panel();
+            TableLayoutPanel toolbar = new TableLayoutPanel();
             toolbar.Dock = DockStyle.Fill;
             toolbar.Margin = new Padding(0, 0, 0, 10);
+            toolbar.ColumnCount = 3;
+            toolbar.RowCount = 1;
+            toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 330F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
             Label searchLabel = Ui.Label(
                 "搜索",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            searchLabel.AutoSize = true;
-            searchLabel.Location = new Point(0, 15);
-            toolbar.Controls.Add(searchLabel);
+            searchLabel.Dock = DockStyle.Fill;
+            toolbar.Controls.Add(searchLabel, 0, 0);
 
             _search = new TextBox();
             _search.AutoSize = false;
@@ -4726,25 +4783,24 @@ namespace PcManagerLite
             _search.Font = Palette.Body;
             _search.BackColor = Palette.Card;
             _search.ForeColor = Palette.Ink;
-            _search.Location = new Point(42, 11);
-            _search.Height = 30;
-            _search.Width = 330;
+            _search.Dock = DockStyle.Fill;
+            _search.Margin = new Padding(0, 10, 12, 10);
             _search.TextChanged += delegate { ApplySearchFilter(true); };
             _search.HandleCreated += delegate
             {
                 NativeSystem.ApplyControlTheme(_search.Handle, Palette.IsDark, false);
                 NativeSystem.SetCueBanner(_search.Handle, "输入名称、来源或命令关键字…");
             };
-            toolbar.Controls.Add(_search);
+            toolbar.Controls.Add(_search, 1, 0);
 
             Label filterHint = Ui.Label(
                 "按名称、来源或启动命令过滤，勾选状态会保留",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            filterHint.AutoSize = true;
-            filterHint.Location = new Point(390, 15);
-            toolbar.Controls.Add(filterHint);
+            filterHint.Dock = DockStyle.Fill;
+            filterHint.Margin = new Padding(4, 0, 0, 0);
+            toolbar.Controls.Add(filterHint, 2, 0);
             root.Controls.Add(toolbar, 0, 2);
 
             RoundedPanel gridPanel = new RoundedPanel();
@@ -4905,10 +4961,10 @@ namespace PcManagerLite
                 int disabled = StartupManagerService.DisabledBackupCount();
                 _status.Text = disabled > 0
                     ? String.Format(
-                        "扫描完成；当前有 {0} 个启动项保持启用，{1} 个已由本工具禁用。",
+                        "已启用 {0} 项，本工具已禁用 {1} 项。",
                         _items.Count,
                         disabled)
-                    : "扫描完成；勾选后点击“禁用选中启动”会立即执行。";
+                    : "扫描完成；勾选后点击“禁用选中启动”立即执行。";
                 _status.ForeColor = Palette.Muted;
                 _restoreButton.Enabled = disabled > 0;
                 ApplySearchFilter(false);
@@ -4950,7 +5006,7 @@ namespace PcManagerLite
             {
                 _status.Text = keyword.Length == 0
                     ? String.Format(
-                        "共 {0} 个启动项；勾选后点击“禁用选中启动”会立即执行。",
+                        "共 {0} 个启动项；勾选后点击“禁用选中启动”立即执行。",
                         _items.Count)
                     : String.Format(
                         "共 {0} 个启动项，匹配“{1}”的 {2} 个。",
@@ -5943,17 +5999,23 @@ namespace PcManagerLite
             _sizeValue = Ui.BuildStatCard(stats, 2, "登记占用", "正在读取", Palette.Warning);
             root.Controls.Add(stats, 0, 1);
 
-            Panel toolbar = new Panel();
+            TableLayoutPanel toolbar = new TableLayoutPanel();
             toolbar.Dock = DockStyle.Fill;
             toolbar.Margin = new Padding(0, 0, 0, 10);
+            toolbar.ColumnCount = 3;
+            toolbar.RowCount = 1;
+            toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 330F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
             Label searchLabel = Ui.Label(
                 "搜索",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            searchLabel.AutoSize = true;
-            searchLabel.Location = new Point(0, 15);
-            toolbar.Controls.Add(searchLabel);
+            searchLabel.Dock = DockStyle.Fill;
+            toolbar.Controls.Add(searchLabel, 0, 0);
 
             _search = new TextBox();
             _search.AutoSize = false;
@@ -5961,16 +6023,24 @@ namespace PcManagerLite
             _search.Font = Palette.Body;
             _search.BackColor = Palette.Card;
             _search.ForeColor = Palette.Ink;
-            _search.Location = new Point(42, 11);
-            _search.Height = 30;
-            _search.Width = 330;
+            _search.Dock = DockStyle.Fill;
+            _search.Margin = new Padding(0, 10, 12, 10);
             _search.TextChanged += delegate { ApplyFilter(); };
             _search.HandleCreated += delegate
             {
                 NativeSystem.ApplyControlTheme(_search.Handle, Palette.IsDark, false);
                 NativeSystem.SetCueBanner(_search.Handle, "输入程序名称或发布者…");
             };
-            toolbar.Controls.Add(_search);
+            toolbar.Controls.Add(_search, 1, 0);
+
+            Label filterHint = Ui.Label(
+                "双击任意一行可打开安装目录",
+                Palette.Small,
+                Palette.Muted,
+                ContentAlignment.MiddleLeft);
+            filterHint.Dock = DockStyle.Fill;
+            filterHint.Margin = new Padding(4, 0, 0, 0);
+            toolbar.Controls.Add(filterHint, 2, 0);
             root.Controls.Add(toolbar, 0, 2);
 
             RoundedPanel gridCard = new RoundedPanel();
@@ -6450,6 +6520,7 @@ namespace PcManagerLite
         private readonly RoundedPanel[] _cards = new RoundedPanel[MaxCards];
         private readonly Label[] _driveNames = new Label[MaxCards];
         private readonly Label[] _driveValues = new Label[MaxCards];
+        private readonly Label[] _drivePercents = new Label[MaxCards];
         private readonly UsageBar[] _driveBars = new UsageBar[MaxCards];
         private readonly ComboBox _driveCombo;
         private readonly ComboBox _sizeCombo;
@@ -6519,6 +6590,16 @@ namespace PcManagerLite
                 valueLabel.Location = new Point(14, 32);
                 card.Controls.Add(valueLabel);
 
+                Label percentLabel = Ui.Label(
+                    "—",
+                    Palette.Small,
+                    Palette.Muted,
+                    ContentAlignment.MiddleRight);
+                percentLabel.AutoSize = false;
+                percentLabel.Size = new Size(82, 18);
+                percentLabel.Location = new Point(14, 12);
+                card.Controls.Add(percentLabel);
+
                 UsageBar bar = new UsageBar();
                 bar.Location = new Point(14, 62);
                 bar.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
@@ -6527,46 +6608,58 @@ namespace PcManagerLite
                 card.Resize += delegate
                 {
                     bar.Width = Math.Max(20, card.ClientSize.Width - 28);
+                    int inset = (int)Math.Round(14 * Ui.ScaleFactor(card));
+                    percentLabel.Left = Math.Max(
+                        inset,
+                        card.ClientSize.Width - percentLabel.Width - inset);
                 };
 
                 _cards[i] = card;
                 _driveNames[i] = nameLabel;
                 _driveValues[i] = valueLabel;
+                _drivePercents[i] = percentLabel;
                 _driveBars[i] = bar;
                 _driveCards.Controls.Add(card, i, 0);
             }
             root.Controls.Add(_driveCards, 0, 1);
 
-            Panel toolbar = new Panel();
+            TableLayoutPanel toolbar = new TableLayoutPanel();
             toolbar.Dock = DockStyle.Fill;
             toolbar.Margin = new Padding(0, 0, 0, 10);
+            toolbar.ColumnCount = 6;
+            toolbar.RowCount = 1;
+            toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 44F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118F));
+            toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             Label driveLabel = Ui.Label(
                 "扫描位置",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            driveLabel.AutoSize = true;
-            driveLabel.Location = new Point(0, 15);
-            toolbar.Controls.Add(driveLabel);
+            driveLabel.Dock = DockStyle.Fill;
+            toolbar.Controls.Add(driveLabel, 0, 0);
 
             _driveCombo = CreateToolbarCombo();
-            _driveCombo.Location = new Point(68, 10);
-            _driveCombo.Width = 190;
-            toolbar.Controls.Add(_driveCombo);
+            _driveCombo.Dock = DockStyle.Fill;
+            _driveCombo.Margin = new Padding(0, 10, 8, 10);
+            toolbar.Controls.Add(_driveCombo, 1, 0);
 
             Label sizeLabel = Ui.Label(
                 "大于",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            sizeLabel.AutoSize = true;
-            sizeLabel.Location = new Point(276, 15);
-            toolbar.Controls.Add(sizeLabel);
+            sizeLabel.Dock = DockStyle.Fill;
+            toolbar.Controls.Add(sizeLabel, 2, 0);
 
             _sizeCombo = CreateToolbarCombo();
-            _sizeCombo.Location = new Point(314, 10);
-            _sizeCombo.Width = 120;
+            _sizeCombo.Dock = DockStyle.Fill;
+            _sizeCombo.Margin = new Padding(0, 10, 8, 10);
             _sizeCombo.Items.AddRange(new object[]
             {
                 "100 MB",
@@ -6575,22 +6668,22 @@ namespace PcManagerLite
                 "5 GB"
             });
             _sizeCombo.SelectedIndex = 2;
-            toolbar.Controls.Add(_sizeCombo);
+            toolbar.Controls.Add(_sizeCombo, 3, 0);
 
             _scanButton = Ui.CreateButton("开始扫描", true);
-            _scanButton.Width = 108;
-            _scanButton.Location = new Point(450, 10);
+            _scanButton.Dock = DockStyle.Fill;
+            _scanButton.Margin = new Padding(0, 8, 8, 8);
             _scanButton.Click += delegate { StartScan(); };
-            toolbar.Controls.Add(_scanButton);
+            toolbar.Controls.Add(_scanButton, 4, 0);
 
             Label hint = Ui.Label(
                 "跳过 Windows、回收站、系统还原等系统目录，不跟随符号链接",
                 Palette.Small,
                 Palette.Muted,
                 ContentAlignment.MiddleLeft);
-            hint.AutoSize = true;
-            hint.Location = new Point(574, 15);
-            toolbar.Controls.Add(hint);
+            hint.Dock = DockStyle.Fill;
+            hint.Margin = new Padding(6, 0, 0, 0);
+            toolbar.Controls.Add(hint, 5, 0);
             root.Controls.Add(toolbar, 0, 2);
 
             RoundedPanel gridCard = new RoundedPanel();
@@ -6692,6 +6785,12 @@ namespace PcManagerLite
                     "{0} 可用 / {1}",
                     Format.Bytes(drive.FreeBytes),
                     Format.Bytes(drive.TotalBytes));
+                _drivePercents[i].Text = String.Format("已用 {0:0.#}%", drive.UsedPercent);
+                _drivePercents[i].ForeColor = drive.UsedPercent >= 90
+                    ? Palette.Danger
+                    : drive.UsedPercent >= 75
+                        ? Palette.Warning
+                        : Palette.Muted;
                 _driveBars[i].Percent = drive.UsedPercent;
                 _driveBars[i].FillColor = drive.UsedPercent >= 90
                     ? Palette.Danger
@@ -6704,6 +6803,7 @@ namespace PcManagerLite
             {
                 _cards[i].Visible = false;
             }
+            ApplyDriveColumnLayout(Math.Min(drives.Count, MaxCards));
             _lastDriveCount = drives.Count;
             foreach (DriveUsage drive in drives)
             {
@@ -6713,6 +6813,25 @@ namespace PcManagerLite
             {
                 int index = previous == null ? 0 : _driveCombo.Items.IndexOf(previous);
                 _driveCombo.SelectedIndex = index >= 0 ? index : 0;
+            }
+        }
+
+        private void ApplyDriveColumnLayout(int visibleCount)
+        {
+            int visible = Math.Max(1, Math.Min(visibleCount, MaxCards));
+            float width = 100F / visible;
+            for (int i = 0; i < MaxCards; i++)
+            {
+                bool shown = i < visible;
+                _driveCards.ColumnStyles[i].SizeType = shown
+                    ? SizeType.Percent
+                    : SizeType.Absolute;
+                _driveCards.ColumnStyles[i].Width = shown ? width : 0F;
+                _cards[i].Margin = new Padding(
+                    i == 0 ? 0 : 5,
+                    0,
+                    i == visible - 1 ? 0 : 5,
+                    0);
             }
         }
 
@@ -6907,9 +7026,9 @@ namespace PcManagerLite
             content.RowCount = 3;
             content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 250F));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 160F));
-            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 176F));
+            content.RowStyles.Add(new RowStyle(SizeType.Percent, 40F));
+            content.RowStyles.Add(new RowStyle(SizeType.Percent, 27F));
+            content.RowStyles.Add(new RowStyle(SizeType.Percent, 33F));
 
             RoundedPanel devices = BuildInfoCard(
                 "设备与系统",

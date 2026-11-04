@@ -1650,7 +1650,7 @@ namespace PcManagerLite
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "explorer", "dwm", "taskmgr", "steam", "steamwebhelper",
-                "steamservice", "gameoverlayui64", "msedge", "chrome", "firefox",
+                "steamservice", "gameoverlayui", "gameoverlayui64", "msedge", "chrome", "firefox",
                 "brave", "opera", "vivaldi", "qq", "chatgpt", "wechat", "weixin",
                 "discord", "teams", "telegram", "gameviewerserver", "gameviewerservice",
                 "uu_launcher", "uu", "cmd", "powershell", "pwsh", "windowsterminal",
@@ -1664,7 +1664,13 @@ namespace PcManagerLite
             GameSnapshot snapshot = new GameSnapshot();
             List<SteamGameInfo> steamGames = GetSteamGames();
             snapshot.InstalledSteamGames = steamGames.Count;
-            int currentSession = Process.GetCurrentProcess().SessionId;
+            int currentSession;
+            int currentPid;
+            using (Process self = Process.GetCurrentProcess())
+            {
+                currentSession = self.SessionId;
+                currentPid = self.Id;
+            }
             int foregroundPid = NativeSystem.GetForegroundProcessId();
             IntPtr foregroundWindow = NativeSystem.ForegroundWindow();
             bool foregroundFullscreen =
@@ -1675,7 +1681,7 @@ namespace PcManagerLite
             {
                 try
                 {
-                    if (process.Id == Process.GetCurrentProcess().Id ||
+                    if (process.Id == currentPid ||
                         process.SessionId != currentSession)
                     {
                         continue;
@@ -2348,7 +2354,13 @@ namespace PcManagerLite
         {
             Dictionary<string, ProcessGroup> groups =
                 new Dictionary<string, ProcessGroup>(StringComparer.OrdinalIgnoreCase);
-            int currentSession = Process.GetCurrentProcess().SessionId;
+            int currentSession;
+            int currentPid;
+            using (Process self = Process.GetCurrentProcess())
+            {
+                currentSession = self.SessionId;
+                currentPid = self.Id;
+            }
 
             foreach (Process process in Process.GetProcesses())
             {
@@ -2359,7 +2371,7 @@ namespace PcManagerLite
                     {
                         continue;
                     }
-                    if (process.Id == Process.GetCurrentProcess().Id ||
+                    if (process.Id == currentPid ||
                         process.SessionId != currentSession)
                     {
                         continue;
@@ -2517,6 +2529,13 @@ namespace PcManagerLite
             Add(map, "douyin", "抖音", "视频软件；关闭后停止播放", RiskLevel.Low, true);
             Add(
                 map,
+                "gameoverlayui",
+                "Steam 游戏覆盖层",
+                "关闭可降低少量覆盖层开销；不影响 Steam 主程序",
+                RiskLevel.Medium,
+                false);
+            Add(
+                map,
                 "gameoverlayui64",
                 "Steam 游戏覆盖层",
                 "关闭可降低少量覆盖层开销；不影响 Steam 主程序",
@@ -2622,14 +2641,37 @@ namespace PcManagerLite
                     active[0].Length >= 2 ? active[0].Substring(0, 2) : "",
                     StringComparison.OrdinalIgnoreCase))
             {
-                return active[0].Substring(0, 2) + " 运行中 → " +
-                    entries[0].Substring(0, 2) + " 重启生效";
+                return DescribePageFileDrive(active[0]) + " 运行中 → " +
+                    DescribePageFileDrive(entries[0]) + " 重启生效";
+            }
+            if (entries.Length == 1 && IsSystemManagedPageFile(entries[0]))
+            {
+                return "系统自动管理";
             }
             if (entries.Length == 1 && entries[0].Length >= 2)
             {
-                return entries[0].Substring(0, 2) + " · 系统管理";
+                bool automatic = entries[0].TrimEnd().EndsWith(
+                    " 0 0",
+                    StringComparison.Ordinal);
+                return entries[0].Substring(0, 2) +
+                    (automatic ? " 系统托管" : " 系统管理");
             }
             return entries.Length + " 个页面文件";
+        }
+
+        private static bool IsSystemManagedPageFile(string entry)
+        {
+            return !String.IsNullOrEmpty(entry) &&
+                entry.TrimStart().StartsWith("?:", StringComparison.Ordinal);
+        }
+
+        private static string DescribePageFileDrive(string entry)
+        {
+            if (IsSystemManagedPageFile(entry))
+            {
+                return "系统托管";
+            }
+            return entry.Length >= 2 ? entry.Substring(0, 2) : entry;
         }
 
         public static string[] GetActivePageFileEntries()

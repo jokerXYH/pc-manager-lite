@@ -6,7 +6,7 @@
 
 官网下载页：[jokerx.top · 软件管理](https://jokerx.top/projects/software/index.html)
 
-当前版本：`2.6.0`
+当前版本：`2.6.1`
 
 ## 截图
 
