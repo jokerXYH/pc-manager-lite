@@ -2072,7 +2072,7 @@ namespace PcManagerLite
                 "关闭后台占用并优化系统设置",
                 "等待检测",
                 Palette.Aqua,
-                "立即加速",
+                "前往加速",
                 delegate { Navigate(ManagerView.Game); });
 
             _networkCardValue = AddQuickCard(
@@ -2082,7 +2082,7 @@ namespace PcManagerLite
                 "检测延迟、丢包和域名解析",
                 "网络已连接",
                 Palette.Warning,
-                "检测网络",
+                "前往检测",
                 delegate { Navigate(ManagerView.Network); });
             root.Controls.Add(quickCards, 0, 2);
 
@@ -2199,7 +2199,7 @@ namespace PcManagerLite
 
             if (!String.IsNullOrWhiteSpace(error))
             {
-                _ring.SetResult(0, "体检失败", "请查看管家日志");
+                _ring.SetResult(0, "体检失败", "可在恢复中心打开操作日志查看原因");
                 _scoreHint.Text = error;
                 _scoreHint.ForeColor = Palette.Danger;
                 return;
@@ -2791,7 +2791,8 @@ namespace PcManagerLite
                         ? "本次释放 " + Format.Bytes(result.DeletedBytes)
                         : "清理未完成";
                     _categories = null;
-                    _grid.Enabled = false;
+                    // 旧扫描数据已失效，重置为空态，避免表格残留与“已清理”矛盾的旧大小。
+                    ShowEmptyState();
                     _cleanButton.Enabled = false;
                     _scanButton.Enabled = true;
                     _progress.Visible = false;

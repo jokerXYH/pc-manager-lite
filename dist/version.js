@@ -1,7 +1,7 @@
 window.PC_MANAGER_LITE_RELEASE = {
   "versionName": "2.7.0",
   "size": 273920,
-  "sha256": "d1f91569349670a56a47cf30bdf68ce2822cc2f73cae74b21a227e045da244aa",
+  "sha256": "e246842c89632b5613c97f1a398db6f9605f132e01a104b9ffe101b5623ce21f",
   "downloadUrl": "https://jokerx.top/downloads/pc-manager-lite/pc-manager-lite.exe",
   "releaseNotes": [
     "一键体检与系统状态读取改为后台执行，界面切换更流畅",
