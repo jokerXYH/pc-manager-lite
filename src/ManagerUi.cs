@@ -10,14 +10,8 @@ using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("电脑管家 Lite")]
-[assembly: System.Reflection.AssemblyDescription("轻量清理、软件管理、安全防护与游戏加速工具")]
-[assembly: System.Reflection.AssemblyProduct("电脑管家 Lite")]
-[assembly: System.Reflection.AssemblyCompany("Joker X")]
-[assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 Joker X")]
-[assembly: System.Reflection.AssemblyTrademark("jokerx.top")]
-[assembly: System.Reflection.AssemblyVersion("2.6.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.6.1.0")]
+// 程序集特性（版本号等）由 build.ps1 生成的 src\AssemblyInfo.cs 提供，
+// 版本号的唯一来源是 build.ps1 顶部的 $Version。
 
 namespace PcManagerLite
 {
@@ -28,6 +22,15 @@ namespace PcManagerLite
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            try
+            {
+                // 清理上次更新遗留的 .bak 与超过保留期的本地日志/帧采样文件。
+                UpdateService.CleanupUpdateArtifacts();
+                LocalDataMaintenance.Run();
+            }
+            catch
+            {
+            }
             ManagerSettings startupSettings = ManagerSettings.Load();
             Palette.ApplyMode(startupSettings.Theme);
             Palette.ApplyAccent(startupSettings.Accent);
@@ -584,6 +587,12 @@ namespace PcManagerLite
         public static readonly Font SectionTitle = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold);
         public static readonly Font Metric = new Font("Microsoft YaHei UI", 17F, FontStyle.Bold);
         public static readonly Font SidebarBrand = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold);
+        // 以下为高频绘制/构造路径使用的共享字体，避免每次重绘或建卡都 new Font。
+        public static readonly Font HeroTitle = new Font("Microsoft YaHei UI", 18F, FontStyle.Bold);
+        public static readonly Font Metric13 = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
+        public static readonly Font Metric15 = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold);
+        public static readonly Font Metric22 = new Font("Microsoft YaHei UI", 22F, FontStyle.Bold);
+        public static readonly Font RingNumber = new Font("Microsoft YaHei UI", 25F, FontStyle.Bold);
 
         public static void ApplyMode(string mode)
         {
@@ -974,11 +983,29 @@ namespace PcManagerLite
 
         public void UpdateKnownSystemState()
         {
-            MemoryMetrics memory = NativeSystem.GetMemory();
-            GameSnapshot games = GameDetector.Snapshot();
-            string pageFile = SystemOptimizer.GetPageFileDisplay();
-            NetworkReport adapter = NetworkDiagnostics.ReadAdapter();
-            _dashboardPage.UpdateKnownState(memory, pageFile, games, adapter);
+            // 进程枚举与 WMI 查询较慢，放到后台线程执行，避免阻塞 UI。
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                MemoryMetrics memory = null;
+                GameSnapshot games = null;
+                string pageFile = null;
+                NetworkReport adapter = null;
+                try
+                {
+                    memory = NativeSystem.GetMemory();
+                    games = GameDetector.Snapshot();
+                    pageFile = SystemOptimizer.GetPageFileDisplay();
+                    adapter = NetworkDiagnostics.ReadAdapter();
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Write("读取系统状态失败: " + ex);
+                }
+                SafeBeginInvoke(delegate
+                {
+                    _dashboardPage.UpdateKnownState(memory, pageFile, games, adapter);
+                });
+            });
         }
 
         private Panel BuildSidebar()
@@ -995,7 +1022,7 @@ namespace PcManagerLite
 
             Label mark = new Label();
             mark.Text = "净";
-            mark.Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold);
+            mark.Font = Palette.Metric13;
             mark.ForeColor = Color.White;
             mark.BackColor = Palette.Accent;
             mark.TextAlign = ContentAlignment.MiddleCenter;
@@ -1597,7 +1624,7 @@ namespace PcManagerLite
             }
 
             string number = _score < 0 ? "—" : _score.ToString();
-            using (Font numberFont = new Font("Microsoft YaHei UI", 25F, FontStyle.Bold))
+            Font numberFont = Palette.RingNumber;
             {
                 Rectangle numberArea = new Rectangle(
                     0,
@@ -1762,7 +1789,7 @@ namespace PcManagerLite
 
             Label valueLabel = Label(
                 value,
-                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                Palette.Metric13,
                 accent,
                 ContentAlignment.MiddleLeft);
             valueLabel.Dock = DockStyle.Fill;
@@ -1956,7 +1983,7 @@ namespace PcManagerLite
             heroText.BackColor = Color.Transparent;
             Label heroTitle = Ui.Label(
                 "系统状态概览",
-                new Font("Microsoft YaHei UI", 18F, FontStyle.Bold),
+                Palette.HeroTitle,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
             heroTitle.AutoSize = true;
@@ -2116,7 +2143,7 @@ namespace PcManagerLite
             {
                 _ramValue.Text = "读取失败";
             }
-            _pageFileValue.Text = pageFile;
+            _pageFileValue.Text = pageFile ?? _pageFileValue.Text;
             _gameValue.Text =
                 games != null && games.RunningGames.Count > 0
                     ? games.Summary
@@ -2184,7 +2211,7 @@ namespace PcManagerLite
             {
                 score -= Math.Min(20, (int)Math.Ceiling(junkBytes / 1073741824.0 * 4));
             }
-            if (SystemOptimizer.PageFileNeedsMove())
+            if (SystemOptimizer.CanMovePageFileToD())
             {
                 score -= 4;
             }
@@ -2488,7 +2515,7 @@ namespace PcManagerLite
 
             _totalValue = Ui.Label(
                 "尚未扫描",
-                new Font("Microsoft YaHei UI", 22F, FontStyle.Bold),
+                Palette.Metric22,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
             _totalValue.AutoSize = true;
@@ -2869,6 +2896,7 @@ namespace PcManagerLite
         private List<GameProcessInfo> _detectedGames;
         private bool _busy;
         private bool _capturing;
+        private bool _refreshing;
 
         public GamePage(MainForm owner)
         {
@@ -2913,7 +2941,7 @@ namespace PcManagerLite
                 stats,
                 2,
                 "虚拟内存",
-                SystemOptimizer.GetPageFileDisplay(),
+                "正在读取",
                 Palette.Warning);
             root.Controls.Add(stats, 0, 1);
 
@@ -3125,7 +3153,7 @@ namespace PcManagerLite
 
             _scanButton = Ui.CreateButton("扫描后台", false);
             _scanButton.Width = 96;
-            _scanButton.Click += delegate { Scan(); };
+            _scanButton.Click += delegate { BeginScan(); };
 
             _cleanCacheButton = Ui.CreateButton("清理游戏缓存", false);
             _cleanCacheButton.Width = 118;
@@ -3145,7 +3173,7 @@ namespace PcManagerLite
                 buttons.Left = actions.ClientSize.Width - buttons.Width;
             };
 
-            Scan();
+            BeginScan();
         }
 
         private static void LayoutFrameCard(
@@ -3166,18 +3194,49 @@ namespace PcManagerLite
 
         public void RefreshState()
         {
-            RefreshGames();
-            _pageFileValue.Text = SystemOptimizer.GetPageFileDisplay();
-            _pageFileOption.Enabled = SystemOptimizer.CanMovePageFileToD();
-            if (!_pageFileOption.Enabled)
+            // 进程枚举、PresentMon 探测和 WMI 查询都在后台执行，避免阻塞 UI 线程。
+            if (_refreshing)
             {
-                _pageFileOption.Checked = false;
+                return;
             }
+            _refreshing = true;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                GameSnapshot snapshot = null;
+                string presentMon = null;
+                string pageFile = null;
+                bool canMove = false;
+                try
+                {
+                    snapshot = GameDetector.Snapshot();
+                    presentMon = FrameCaptureService.FindPresentMon();
+                    pageFile = SystemOptimizer.GetPageFileDisplay();
+                    canMove = SystemOptimizer.CanMovePageFileToD();
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Write("刷新游戏加速页失败: " + ex);
+                }
+                SafeBeginInvoke(delegate
+                {
+                    _refreshing = false;
+                    if (snapshot == null)
+                    {
+                        return;
+                    }
+                    RefreshGames(snapshot, presentMon);
+                    _pageFileValue.Text = pageFile ?? _pageFileValue.Text;
+                    _pageFileOption.Enabled = canMove;
+                    if (!_pageFileOption.Enabled)
+                    {
+                        _pageFileOption.Checked = false;
+                    }
+                });
+            });
         }
 
-        private void RefreshGames()
+        private void RefreshGames(GameSnapshot snapshot, string presentMon)
         {
-            GameSnapshot snapshot = GameDetector.Snapshot();
             _detectedGames = snapshot.RunningGames;
             _gameCombo.Items.Clear();
             foreach (GameProcessInfo game in _detectedGames)
@@ -3211,8 +3270,8 @@ namespace PcManagerLite
                 _gameValue.ForeColor = Palette.Accent;
             }
 
-            string presentMon = FrameCaptureService.FindPresentMon();
-            if (String.IsNullOrWhiteSpace(presentMon))
+            string presentMonText = presentMon ?? String.Empty;
+            if (String.IsNullOrWhiteSpace(presentMonText))
             {
                 _frameResult.Text = "未找到 PresentMon，帧时间诊断暂不可用。";
                 _frameResult.ForeColor = Palette.Warning;
@@ -3228,7 +3287,7 @@ namespace PcManagerLite
                 _frameResult.ForeColor = Palette.Muted;
             }
             _frameButton.Enabled =
-                !String.IsNullOrWhiteSpace(presentMon) &&
+                !String.IsNullOrWhiteSpace(presentMonText) &&
                 _detectedGames.Count > 0 &&
                 !_busy &&
                 !_capturing;
@@ -3283,7 +3342,7 @@ namespace PcManagerLite
                     _capturing = false;
                     _frameProgress.Visible = false;
                     SetBusy(false);
-                    RefreshGames();
+                    RefreshState();
                     if (!result.Success)
                     {
                         _frameResult.Text = result.Error;
@@ -3318,69 +3377,83 @@ namespace PcManagerLite
             });
         }
 
-        private void Scan()
+        private void BeginScan()
         {
             if (_busy)
             {
                 return;
             }
-            try
+            _busy = true;
+            SetBusy(true);
+            _summary.Text = "正在扫描后台程序…";
+            _summary.ForeColor = Palette.AccentDark;
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                Cursor = Cursors.WaitCursor;
-                _groups = ProcessScanner.ScanGroups();
-                _grid.Rows.Clear();
-                long total = 0;
-                foreach (ProcessGroup group in _groups)
+                List<ProcessGroup> groups = null;
+                try
                 {
-                    int index = _grid.Rows.Add();
-                    DataGridViewRow row = _grid.Rows[index];
-                    row.Tag = group;
-                    row.Cells["Selected"].Value = group.DefaultSelected;
-                    row.Cells["Name"].Value = group.DisplayName;
-                    row.Cells["Count"].Value = group.ProcessIds.Count;
-                    row.Cells["Memory"].Value = Format.Bytes(group.WorkingSetBytes);
-                    row.Cells["Advice"].Value = group.Recommendation;
-                    row.Cells["Note"].Value = group.Note;
-                    row.Cells["Advice"].Style.ForeColor =
-                        group.Risk == RiskLevel.Low ? Palette.Success :
-                        group.Risk == RiskLevel.Medium ? Palette.Warning : Palette.Danger;
-                    total += group.WorkingSetBytes;
+                    groups = ProcessScanner.ScanGroups();
                 }
-                if (_groups.Count == 0)
+                catch (Exception ex)
                 {
-                    int index = _grid.Rows.Add();
-                    _grid.Rows[index].Cells["Name"].Value = "没有发现候选后台";
-                    _grid.Rows[index].Cells["Count"].Value = "—";
-                    _grid.Rows[index].Cells["Memory"].Value = "—";
-                    _grid.Rows[index].Cells["Advice"].Value = "—";
-                    _grid.Rows[index].Cells["Note"].Value = "可以直接进行系统设置优化";
-                    _summary.Text = "没有可关闭的候选后台程序";
-                    _backgroundValue.Text = "0 个候选";
+                    FileLogger.Write("扫描后台程序失败: " + ex);
                 }
-                else
+                SafeBeginInvoke(delegate
                 {
-                    _summary.Text = String.Format(
-                        "{0} 组候选，内存占用合计 {1}",
-                        _groups.Count,
-                        Format.Bytes(total));
-                    _backgroundValue.Text = _groups.Count + " 组 · " + Format.Bytes(total);
-                }
-                RefreshState();
-            }
-            catch (Exception ex)
+                    _busy = false;
+                    SetBusy(false);
+                    if (groups == null)
+                    {
+                        _summary.Text = "扫描后台程序失败，请重试。";
+                        _summary.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    FillGroups(groups);
+                });
+            });
+        }
+
+        private void FillGroups(List<ProcessGroup> groups)
+        {
+            _groups = groups;
+            _grid.Rows.Clear();
+            long total = 0;
+            foreach (ProcessGroup group in _groups)
             {
-                FileLogger.Write("扫描后台程序失败: " + ex);
-                MessageBox.Show(
-                    this,
-                    "扫描后台程序失败：\n" + ex.Message,
-                    "扫描失败",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                int index = _grid.Rows.Add();
+                DataGridViewRow row = _grid.Rows[index];
+                row.Tag = group;
+                row.Cells["Selected"].Value = group.DefaultSelected;
+                row.Cells["Name"].Value = group.DisplayName;
+                row.Cells["Count"].Value = group.ProcessIds.Count;
+                row.Cells["Memory"].Value = Format.Bytes(group.WorkingSetBytes);
+                row.Cells["Advice"].Value = group.Recommendation;
+                row.Cells["Note"].Value = group.Note;
+                row.Cells["Advice"].Style.ForeColor =
+                    group.Risk == RiskLevel.Low ? Palette.Success :
+                    group.Risk == RiskLevel.Medium ? Palette.Warning : Palette.Danger;
+                total += group.WorkingSetBytes;
             }
-            finally
+            if (_groups.Count == 0)
             {
-                Cursor = Cursors.Default;
+                int index = _grid.Rows.Add();
+                _grid.Rows[index].Cells["Name"].Value = "没有发现候选后台";
+                _grid.Rows[index].Cells["Count"].Value = "—";
+                _grid.Rows[index].Cells["Memory"].Value = "—";
+                _grid.Rows[index].Cells["Advice"].Value = "—";
+                _grid.Rows[index].Cells["Note"].Value = "可以直接进行系统设置优化";
+                _summary.Text = "没有可关闭的候选后台程序";
+                _backgroundValue.Text = "0 个候选";
             }
+            else
+            {
+                _summary.Text = String.Format(
+                    "{0} 组候选，内存占用合计 {1}",
+                    _groups.Count,
+                    Format.Bytes(total));
+                _backgroundValue.Text = _groups.Count + " 组 · " + Format.Bytes(total);
+            }
+            RefreshState();
         }
 
         private void Optimize()
@@ -3477,7 +3550,7 @@ namespace PcManagerLite
                         message.AppendLine();
                         message.AppendLine("虚拟内存迁移需要重启电脑后生效。");
                     }
-                    Scan();
+                    BeginScan();
                     _summary.Text = message.ToString()
                         .Replace("\r", " ")
                         .Replace("\n", " ")
@@ -3536,33 +3609,51 @@ namespace PcManagerLite
             }
             _summary.Text = "正在恢复本工具修改过的系统设置…";
             _summary.ForeColor = Palette.AccentDark;
-            try
+            SetBusy(true);
+            _busy = true;
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                bool reboot;
-                List<string> lines = SystemOptimizer.RestoreAll(backup, out reboot);
-                StringBuilder message = new StringBuilder();
-                foreach (string line in lines)
+                string error = null;
+                bool reboot = false;
+                List<string> lines = null;
+                try
                 {
-                    message.AppendLine("• " + line);
+                    lines = SystemOptimizer.RestoreAll(backup, out reboot);
                 }
-                if (reboot)
+                catch (Exception ex)
                 {
-                    message.AppendLine();
-                    message.AppendLine("虚拟内存恢复需要重启后生效。");
+                    error = ex.Message;
+                    FileLogger.Write("恢复系统设置失败: " + ex);
                 }
-                _summary.Text = message.ToString()
-                    .Replace("\r", " ")
-                    .Replace("\n", " ")
-                    .Trim();
-                _summary.ForeColor = Palette.Success;
-                RefreshState();
-                _owner.UpdateKnownSystemState();
-            }
-            catch (Exception ex)
-            {
-                _summary.Text = "恢复设置失败：" + ex.Message;
-                _summary.ForeColor = Palette.Danger;
-            }
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    SetBusy(false);
+                    if (error != null)
+                    {
+                        _summary.Text = "恢复设置失败：" + error;
+                        _summary.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    StringBuilder message = new StringBuilder();
+                    foreach (string line in lines)
+                    {
+                        message.AppendLine("• " + line);
+                    }
+                    if (reboot)
+                    {
+                        message.AppendLine();
+                        message.AppendLine("虚拟内存恢复需要重启后生效。");
+                    }
+                    _summary.Text = message.ToString()
+                        .Replace("\r", " ")
+                        .Replace("\n", " ")
+                        .Trim();
+                    _summary.ForeColor = Palette.Success;
+                    RefreshState();
+                    _owner.UpdateKnownSystemState();
+                });
+            });
         }
 
         private void SetBusy(bool busy)
@@ -3597,7 +3688,7 @@ namespace PcManagerLite
 
             Label valueLabel = Ui.Label(
                 value,
-                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                Palette.Metric13,
                 accent,
                 ContentAlignment.MiddleLeft);
             valueLabel.Dock = DockStyle.Fill;
@@ -3704,7 +3795,7 @@ namespace PcManagerLite
 
             _adapterValue = Ui.Label(
                 "正在读取网络…",
-                new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
+                Palette.Metric15,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
             _adapterValue.Dock = DockStyle.Fill;
@@ -4053,6 +4144,7 @@ namespace PcManagerLite
         private readonly ToolTip _tips = new ToolTip();
         private bool _busy;
         private bool _loading;
+        private bool _refreshingScheduled;
         private UpdateCheckResult _lastCheck;
 
         public SettingsPage(MainForm owner, ManagerSettings settings)
@@ -4513,14 +4605,6 @@ namespace PcManagerLite
             _loading = true;
             _checkOnStart.Checked = _settings.CheckUpdatesOnStart;
             _startWithWindows.Checked = AppStartupService.IsEnabled();
-            try
-            {
-                _scheduledCleanup.Checked = ScheduledCleanupService.IsEnabled();
-            }
-            catch
-            {
-                _scheduledCleanup.Checked = false;
-            }
             _loading = false;
             SetThemeButtonState(_systemThemeButton, _settings.Theme == "system");
             SetThemeButtonState(_lightThemeButton, _settings.Theme == "light");
@@ -4529,6 +4613,31 @@ namespace PcManagerLite
                 ? "当前已启用开机自启动"
                 : "当前未启用开机自启动";
             _preferenceStatus.ForeColor = Palette.Muted;
+            // 计划任务查询要起 schtasks.exe 进程（最坏 8 秒），放到后台执行。
+            if (_refreshingScheduled)
+            {
+                return;
+            }
+            _refreshingScheduled = true;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                bool scheduledEnabled = false;
+                try
+                {
+                    scheduledEnabled = ScheduledCleanupService.IsEnabled();
+                }
+                catch
+                {
+                    scheduledEnabled = false;
+                }
+                SafeBeginInvoke(delegate
+                {
+                    _refreshingScheduled = false;
+                    _loading = true;
+                    _scheduledCleanup.Checked = scheduledEnabled;
+                    _loading = false;
+                });
+            });
         }
 
         private void CheckUpdates(bool manual)
@@ -4912,73 +5021,93 @@ namespace PcManagerLite
             {
                 return;
             }
-            try
+            _busy = true;
+            _status.Text = "正在扫描启动项…";
+            _status.ForeColor = Palette.Muted;
+            SetBusy(true, null);
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                Cursor = Cursors.WaitCursor;
-                _items = StartupManagerService.Scan();
-                _grid.Rows.Clear();
-                int canDisable = 0;
-                bool selfStartup = false;
-                string currentExe = Path.GetFileName(
-                    Process.GetCurrentProcess().MainModule.FileName);
-                foreach (StartupItem item in _items)
+                List<StartupItem> items = null;
+                int disabledCount = -1;
+                string currentExe = null;
+                try
                 {
-                    int index = _grid.Rows.Add();
-                    DataGridViewRow row = _grid.Rows[index];
-                    row.Tag = item;
-                    row.Cells["Selected"].Value = false;
-                    row.Cells["Name"].Value = item.Name;
-                    row.Cells["Source"].Value = item.SourceLabel;
-                    row.Cells["Risk"].Value = item.RiskLabel;
-                    row.Cells["Command"].Value = item.Command;
-                    row.Cells["Note"].Value = item.Note;
-                    if (!item.CanDisable)
-                    {
-                        row.Cells["Selected"].ReadOnly = true;
-                        row.Cells["Risk"].Style.ForeColor = Palette.Danger;
-                        row.DefaultCellStyle.ForeColor = Palette.Muted;
-                    }
-                    else
-                    {
-                        canDisable++;
-                        row.Cells["Risk"].Style.ForeColor =
-                            item.SourceType == StartupSourceType.Service
-                                ? Palette.Warning
-                                : Palette.Success;
-                    }
-                    if (!String.IsNullOrWhiteSpace(item.Command) &&
-                        item.Command.IndexOf(
-                            currentExe,
-                            StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        selfStartup = true;
-                    }
+                    items = StartupManagerService.Scan();
+                    disabledCount = StartupManagerService.DisabledBackupCount();
+                    currentExe = Path.GetFileName(ShortcutManager.ApplicationExecutablePath());
                 }
-                _totalValue.Text = _items.Count + " 项";
-                _disableableValue.Text = canDisable + " 项";
-                _selfValue.Text = selfStartup ? "已注册" : "未注册";
-                _selfValue.ForeColor = selfStartup ? Palette.Warning : Palette.Success;
-                int disabled = StartupManagerService.DisabledBackupCount();
-                _status.Text = disabled > 0
-                    ? String.Format(
-                        "已启用 {0} 项，本工具已禁用 {1} 项。",
-                        _items.Count,
-                        disabled)
-                    : "扫描完成；勾选后点击“禁用选中启动”立即执行。";
-                _status.ForeColor = Palette.Muted;
-                _restoreButton.Enabled = disabled > 0;
-                ApplySearchFilter(false);
-            }
-            catch (Exception ex)
+                catch (Exception ex)
+                {
+                    FileLogger.Write("扫描启动项失败: " + ex);
+                }
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    SetBusy(false, null);
+                    if (items == null)
+                    {
+                        _status.Text = "扫描失败，请重试。";
+                        _status.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    FillItems(items, disabledCount, currentExe);
+                });
+            });
+        }
+
+        private void FillItems(List<StartupItem> items, int disabled, string currentExe)
+        {
+            _items = items;
+            _grid.Rows.Clear();
+            int canDisable = 0;
+            bool selfStartup = false;
+            foreach (StartupItem item in _items)
             {
-                _status.Text = "扫描失败：" + ex.Message;
-                _status.ForeColor = Palette.Danger;
-                FileLogger.Write("扫描启动项失败: " + ex);
+                int index = _grid.Rows.Add();
+                DataGridViewRow row = _grid.Rows[index];
+                row.Tag = item;
+                row.Cells["Selected"].Value = false;
+                row.Cells["Name"].Value = item.Name;
+                row.Cells["Source"].Value = item.SourceLabel;
+                row.Cells["Risk"].Value = item.RiskLabel;
+                row.Cells["Command"].Value = item.Command;
+                row.Cells["Note"].Value = item.Note;
+                if (!item.CanDisable)
+                {
+                    row.Cells["Selected"].ReadOnly = true;
+                    row.Cells["Risk"].Style.ForeColor = Palette.Danger;
+                    row.DefaultCellStyle.ForeColor = Palette.Muted;
+                }
+                else
+                {
+                    canDisable++;
+                    row.Cells["Risk"].Style.ForeColor =
+                        item.SourceType == StartupSourceType.Service
+                            ? Palette.Warning
+                            : Palette.Success;
+                }
+                if (!String.IsNullOrWhiteSpace(item.Command) &&
+                    !String.IsNullOrWhiteSpace(currentExe) &&
+                    item.Command.IndexOf(
+                        currentExe,
+                        StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    selfStartup = true;
+                }
             }
-            finally
-            {
-                Cursor = Cursors.Default;
-            }
+            _totalValue.Text = _items.Count + " 项";
+            _disableableValue.Text = canDisable + " 项";
+            _selfValue.Text = selfStartup ? "已注册" : "未注册";
+            _selfValue.ForeColor = selfStartup ? Palette.Warning : Palette.Success;
+            _status.Text = disabled > 0
+                ? String.Format(
+                    "已启用 {0} 项，本工具已禁用 {1} 项。",
+                    _items.Count,
+                    disabled)
+                : "扫描完成；勾选后点击“禁用选中启动”立即执行。";
+            _status.ForeColor = Palette.Muted;
+            _restoreButton.Enabled = disabled > 0;
+            ApplySearchFilter(false);
         }
 
         private void ApplySearchFilter(bool updateStatus)
@@ -5047,31 +5176,37 @@ namespace PcManagerLite
 
             _busy = true;
             SetBusy(true, "正在禁用 " + selected.Count + " 个启动项…");
-            try
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                StartupActionResult result = StartupManagerService.Disable(selected);
-                _busy = false;
-                SetBusy(false, null);
-                Scan();
-                _status.Text = String.Format(
-                    "已禁用 {0} 项，失败 {1} 项。当前运行中的程序不会被结束。",
-                    result.Changed,
-                    result.Failed);
-                _status.ForeColor = result.Failed == 0 ? Palette.Success : Palette.Warning;
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "禁用失败：" + ex.Message;
-                _status.ForeColor = Palette.Danger;
-            }
-            finally
-            {
-                if (_busy)
+                StartupActionResult result = null;
+                string error = null;
+                try
+                {
+                    result = StartupManagerService.Disable(selected);
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    FileLogger.Write("禁用启动项失败: " + ex);
+                }
+                SafeBeginInvoke(delegate
                 {
                     _busy = false;
                     SetBusy(false, null);
-                }
-            }
+                    Scan();
+                    if (error != null)
+                    {
+                        _status.Text = "禁用失败：" + error;
+                        _status.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    _status.Text = String.Format(
+                        "已禁用 {0} 项，失败 {1} 项。当前运行中的程序不会被结束。",
+                        result.Changed,
+                        result.Failed);
+                    _status.ForeColor = result.Failed == 0 ? Palette.Success : Palette.Warning;
+                });
+            });
         }
 
         private void RestoreDisabled()
@@ -5084,31 +5219,37 @@ namespace PcManagerLite
             }
             _busy = true;
             SetBusy(true, "正在恢复启动项…");
-            try
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                StartupActionResult result = StartupManagerService.RestoreAll();
-                _busy = false;
-                SetBusy(false, null);
-                Scan();
-                _status.Text = String.Format(
-                    "已恢复 {0} 项，失败 {1} 项。",
-                    result.Changed,
-                    result.Failed);
-                _status.ForeColor = result.Failed == 0 ? Palette.Success : Palette.Warning;
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "恢复失败：" + ex.Message;
-                _status.ForeColor = Palette.Danger;
-            }
-            finally
-            {
-                if (_busy)
+                StartupActionResult result = null;
+                string error = null;
+                try
+                {
+                    result = StartupManagerService.RestoreAll();
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    FileLogger.Write("恢复启动项失败: " + ex);
+                }
+                SafeBeginInvoke(delegate
                 {
                     _busy = false;
                     SetBusy(false, null);
-                }
-            }
+                    Scan();
+                    if (error != null)
+                    {
+                        _status.Text = "恢复失败：" + error;
+                        _status.ForeColor = Palette.Danger;
+                        return;
+                    }
+                    _status.Text = String.Format(
+                        "已恢复 {0} 项，失败 {1} 项。",
+                        result.Changed,
+                        result.Failed);
+                    _status.ForeColor = result.Failed == 0 ? Palette.Success : Palette.Warning;
+                });
+            });
         }
 
         private void SetBusy(bool busy, string text)
@@ -5122,6 +5263,20 @@ namespace PcManagerLite
             {
                 _status.Text = text;
                 _status.ForeColor = Palette.AccentDark;
+            }
+        }
+
+        private void SafeBeginInvoke(Action action)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    BeginInvoke(action);
+                }
+            }
+            catch
+            {
             }
         }
 
@@ -5139,7 +5294,7 @@ namespace PcManagerLite
 
             Label valueLabel = Ui.Label(
                 value,
-                new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+                Palette.Metric13,
                 accent,
                 ContentAlignment.MiddleLeft);
             valueLabel.Dock = DockStyle.Fill;
@@ -5218,7 +5373,7 @@ namespace PcManagerLite
             backupTitle.Height = 24;
             _backupValue = Ui.Label(
                 "正在检查…",
-                new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
+                Palette.Metric15,
                 Palette.Ink,
                 ContentAlignment.MiddleLeft);
             _backupValue.Dock = DockStyle.Top;
@@ -5248,7 +5403,7 @@ namespace PcManagerLite
             checkpointTitle.Height = 24;
             Label checkpointValue = Ui.Label(
                 "由系统保护决定",
-                new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
+                Palette.Metric15,
                 Palette.Accent,
                 ContentAlignment.MiddleLeft);
             checkpointValue.Dock = DockStyle.Top;
@@ -5389,35 +5544,48 @@ namespace PcManagerLite
             }
             _busy = true;
             SetBusy(true, "正在恢复系统设置…");
-            try
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                bool reboot;
-                List<string> lines = SystemOptimizer.RestoreAll(backup, out reboot);
-                StringBuilder message = new StringBuilder();
-                foreach (string line in lines)
+                string error = null;
+                bool reboot = false;
+                List<string> lines = null;
+                try
                 {
-                    message.AppendLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + line);
+                    lines = SystemOptimizer.RestoreAll(backup, out reboot);
                 }
-                if (reboot)
+                catch (Exception ex)
                 {
-                    message.AppendLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] 虚拟内存修改需要重启后生效");
+                    error = ex.Message;
+                    FileLogger.Write("恢复系统设置失败: " + ex);
                 }
-                _activity.Text = message.ToString();
-                _status.Text = "已恢复本工具修改";
-                _status.ForeColor = Palette.Success;
-                _owner.UpdateKnownSystemState();
-            }
-            catch (Exception ex)
-            {
-                _status.Text = "恢复失败：" + ex.Message;
-                _status.ForeColor = Palette.Danger;
-            }
-            finally
-            {
-                _busy = false;
-                SetBusy(false, _status.Text);
-                RefreshState();
-            }
+                SafeBeginInvoke(delegate
+                {
+                    _busy = false;
+                    if (error == null)
+                    {
+                        StringBuilder message = new StringBuilder();
+                        foreach (string line in lines)
+                        {
+                            message.AppendLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + line);
+                        }
+                        if (reboot)
+                        {
+                            message.AppendLine("[" + DateTime.Now.ToString("HH:mm:ss") + "] 虚拟内存修改需要重启后生效");
+                        }
+                        _activity.Text = message.ToString();
+                        _status.Text = "已恢复本工具修改";
+                        _status.ForeColor = Palette.Success;
+                        _owner.UpdateKnownSystemState();
+                    }
+                    else
+                    {
+                        _status.Text = "恢复失败：" + error;
+                        _status.ForeColor = Palette.Danger;
+                    }
+                    SetBusy(false, _status.Text);
+                    RefreshState();
+                });
+            });
         }
 
         private void CreateCheckpoint()
@@ -6177,6 +6345,7 @@ namespace PcManagerLite
                     _loaded = true;
                     _programs = items;
                     UpdateSummary();
+                    BuildProgramRows();
                     ApplyFilter();
                 });
             });
@@ -6202,24 +6371,11 @@ namespace PcManagerLite
             _sizeValue.Text = size > 0 ? Format.Bytes(size) : "未登记";
         }
 
-        private void ApplyFilter()
+        private void BuildProgramRows()
         {
-            string keyword = _search == null
-                ? String.Empty
-                : _search.Text.Trim();
             _grid.Rows.Clear();
-            int shown = 0;
             foreach (InstalledProgram program in _programs)
             {
-                if (keyword.Length > 0 &&
-                    program.Name.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) < 0 &&
-                    (program.Publisher == null ||
-                     program.Publisher.IndexOf(
-                         keyword,
-                         StringComparison.CurrentCultureIgnoreCase) < 0))
-                {
-                    continue;
-                }
                 int index = _grid.Rows.Add();
                 DataGridViewRow row = _grid.Rows[index];
                 row.Tag = program;
@@ -6252,7 +6408,34 @@ namespace PcManagerLite
                     row.Cells["State"].Style.ForeColor = Palette.Success;
                 }
                 row.Cells["Name"].ToolTipText = program.Name;
-                shown++;
+            }
+        }
+
+        private void ApplyFilter()
+        {
+            string keyword = _search == null
+                ? String.Empty
+                : _search.Text.Trim();
+            // 搜索改为切换行可见性，不再每次按键全量重建表格行。
+            int shown = 0;
+            foreach (DataGridViewRow row in _grid.Rows)
+            {
+                InstalledProgram program = row.Tag as InstalledProgram;
+                if (program == null)
+                {
+                    continue;
+                }
+                bool visible = keyword.Length == 0 ||
+                    program.Name.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) >= 0 ||
+                    (program.Publisher != null &&
+                     program.Publisher.IndexOf(
+                         keyword,
+                         StringComparison.CurrentCultureIgnoreCase) >= 0);
+                row.Visible = visible;
+                if (visible)
+                {
+                    shown++;
+                }
             }
             if (_loaded)
             {

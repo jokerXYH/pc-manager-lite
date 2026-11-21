@@ -10,3 +10,6 @@ dist/*.xml
 dist/*.old
 
 dist/*.bak
+
+# build.ps1 每次构建生成的程序集特性文件（版本号唯一来源在 build.ps1）
+src/AssemblyInfo.cs

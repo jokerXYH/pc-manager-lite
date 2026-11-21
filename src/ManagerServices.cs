@@ -67,7 +67,26 @@ namespace PcManagerLite
                     if (File.Exists(AppPaths.LogFile) &&
                         new FileInfo(AppPaths.LogFile).Length > 2L * 1024L * 1024L)
                     {
-                        File.Delete(AppPaths.LogFile);
+                        // 滚动而不是直接删除：保住上一代日志用于排障。
+                        string rolled = AppPaths.LogFile + ".old";
+                        try
+                        {
+                            if (File.Exists(rolled))
+                            {
+                                File.Delete(rolled);
+                            }
+                            File.Move(AppPaths.LogFile, rolled);
+                        }
+                        catch
+                        {
+                            try
+                            {
+                                File.Delete(AppPaths.LogFile);
+                            }
+                            catch
+                            {
+                            }
+                        }
                     }
                     File.AppendAllText(
                         AppPaths.LogFile,
@@ -105,6 +124,168 @@ namespace PcManagerLite
             }
             catch
             {
+            }
+        }
+    }
+
+    // 本地数据目录的保留期维护：清理审计日志和帧采样 CSV，
+    // 避免长期使用后 %LOCALAPPDATA%\PcManagerLite 无限膨胀。
+    internal static class LocalDataMaintenance
+    {
+        public static void Run()
+        {
+            PruneFiles(AppPaths.DataDirectory, "cleanup-*.log", 30);
+            PruneFiles(
+                Path.Combine(AppPaths.DataDirectory, "captures"),
+                "game-*.csv",
+                14);
+        }
+
+        private static void PruneFiles(string directory, string pattern, int retentionDays)
+        {
+            try
+            {
+                if (!Directory.Exists(directory))
+                {
+                    return;
+                }
+                DateTime cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+                foreach (string file in Directory.GetFiles(directory, pattern))
+                {
+                    try
+                    {
+                        FileInfo info = new FileInfo(file);
+                        if (info.LastWriteTimeUtc < cutoff)
+                        {
+                            info.Delete();
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    internal sealed class ProcessRunResult
+    {
+        public int ExitCode = -1;
+        public bool TimedOut;
+        public readonly StringBuilder Output = new StringBuilder();
+        public readonly StringBuilder Error = new StringBuilder();
+
+        public string Combined
+        {
+            get
+            {
+                string output = Output.ToString().Trim();
+                string error = Error.ToString().Trim();
+                if (output.Length == 0)
+                {
+                    return error;
+                }
+                return error.Length == 0 ? output : output + "\r\n" + error;
+            }
+        }
+    }
+
+    internal static class ProcessRunner
+    {
+        // 统一的外部命令执行入口：
+        // - stdout/stderr 全部异步读取，避免子进程把 4KB 管道写满后互相阻塞。
+        // - 之前的 SystemOptimizer / StartupManagerService / NetworkDiagnostics
+        //   各持有一份同步 ReadToEnd 实现，存在死锁风险且重复，现合并至此。
+        public static ProcessRunResult Run(string fileName, string arguments, int timeoutMs)
+        {
+            ProcessRunResult result = new ProcessRunResult();
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = fileName;
+                startInfo.Arguments = arguments;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                startInfo.StandardOutputEncoding = Encoding.Default;
+                startInfo.StandardErrorEncoding = Encoding.Default;
+                using (Process process = new Process())
+                {
+                    process.StartInfo = startInfo;
+                    process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null)
+                        {
+                            lock (result) { result.Output.AppendLine(e.Data); }
+                        }
+                    };
+                    process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null)
+                        {
+                            lock (result) { result.Error.AppendLine(e.Data); }
+                        }
+                    };
+                    if (!process.Start())
+                    {
+                        return result;
+                    }
+                    process.BeginOutputReadLine();
+                    process.BeginErrorReadLine();
+                    if (!process.WaitForExit(timeoutMs))
+                    {
+                        result.TimedOut = true;
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                    else
+                    {
+                        process.WaitForExit();
+                    }
+                    result.ExitCode = process.HasExited ? process.ExitCode : -1;
+                }
+            }
+            catch
+            {
+                result.ExitCode = -1;
+            }
+            return result;
+        }
+    }
+
+    internal static class SafeFiles
+    {
+        // 备份类文件是恢复功能的唯一防线：先写临时文件再原子替换，
+        // 避免进程在写入中途崩溃留下半截备份。
+        public static void AtomicWriteAllLines(string path, string[] lines)
+        {
+            string temporary = path + ".tmp";
+            File.WriteAllLines(temporary, lines, Encoding.UTF8);
+            if (File.Exists(path))
+            {
+                try
+                {
+                    File.Replace(temporary, path, null);
+                }
+                catch (IOException)
+                {
+                    File.Delete(path);
+                    File.Move(temporary, path);
+                }
+            }
+            else
+            {
+                File.Move(temporary, path);
             }
         }
     }
@@ -1062,12 +1243,12 @@ namespace PcManagerLite
                     {
                         foreach (string file in Directory.GetFiles(directory))
                         {
-                            string full = Path.GetFullPath(file);
-                            if (!full.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                            // GetFiles(绝对目录) 已返回完整路径；保留前缀校验即可，去掉逐文件 GetFullPath 开销。
+                            if (!file.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
                             {
                                 continue;
                             }
-                            MeasureFile(full, minimumAgeHours, category);
+                            MeasureFile(file, minimumAgeHours, category);
                         }
                         foreach (string child in Directory.GetDirectories(directory))
                         {
@@ -1206,7 +1387,8 @@ namespace PcManagerLite
         {
             try
             {
-                string full = Path.GetFullPath(file);
+                // 调用方传入的均为基于扫描根目录的绝对路径；直接做前缀校验，不再逐文件 GetFullPath。
+                string full = file;
                 if (!full.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
                 {
                     result.FailedItems++;
@@ -1487,35 +1669,13 @@ namespace PcManagerLite
 
         private static string RunRepairCommand(string fileName, string arguments)
         {
-            try
+            ProcessRunResult run = ProcessRunner.Run(fileName, arguments, 8000);
+            string text = run.Combined.Trim();
+            if (text.Length == 0)
             {
-                ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = fileName;
-                startInfo.Arguments = arguments;
-                startInfo.UseShellExecute = false;
-                startInfo.CreateNoWindow = true;
-                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-                startInfo.RedirectStandardOutput = true;
-                startInfo.RedirectStandardError = true;
-                startInfo.StandardOutputEncoding = Encoding.Default;
-                startInfo.StandardErrorEncoding = Encoding.Default;
-                using (Process process = Process.Start(startInfo))
-                {
-                    string output = process.StandardOutput.ReadToEnd();
-                    string error = process.StandardError.ReadToEnd();
-                    process.WaitForExit(8000);
-                    string text = (output + "\r\n" + error).Trim();
-                    if (text.Length == 0)
-                    {
-                        text = "命令完成";
-                    }
-                    return fileName + " " + arguments + "：" + text;
-                }
+                text = run.TimedOut ? "命令超时" : "命令完成";
             }
-            catch (Exception ex)
-            {
-                return fileName + " " + arguments + "：失败 - " + ex.Message;
-            }
+            return fileName + " " + arguments + "：" + text;
         }
 
         private static PingSample PingAddress(string address, int attempts, int timeout)
@@ -2315,6 +2475,7 @@ namespace PcManagerLite
         public RiskLevel Risk;
         public bool DefaultSelected;
         public readonly List<int> ProcessIds = new List<int>();
+        public readonly Dictionary<int, long> ProcessBytes = new Dictionary<int, long>();
         public long WorkingSetBytes;
     }
 
@@ -2394,7 +2555,9 @@ namespace PcManagerLite
                     group.ProcessIds.Add(process.Id);
                     try
                     {
-                        group.WorkingSetBytes += process.WorkingSet64;
+                        long workingSet = process.WorkingSet64;
+                        group.WorkingSetBytes += workingSet;
+                        group.ProcessBytes[process.Id] = workingSet;
                     }
                     catch
                     {
@@ -2428,7 +2591,11 @@ namespace PcManagerLite
         public static TerminationResult TerminateGroups(List<ProcessGroup> selected)
         {
             TerminationResult result = new TerminationResult();
-            int currentSession = Process.GetCurrentProcess().SessionId;
+            int currentSession;
+            using (Process self = Process.GetCurrentProcess())
+            {
+                currentSession = self.SessionId;
+            }
 
             foreach (ProcessGroup group in selected)
             {
@@ -2481,9 +2648,11 @@ namespace PcManagerLite
                         }
                         if (process.HasExited)
                         {
+                            long bytes;
                             result.ClosedProcesses++;
-                            result.WorkingSetBytes += group.WorkingSetBytes /
-                                Math.Max(1, group.ProcessIds.Count);
+                            // 按该进程实际工作集累计，避免组内部分失败时按均值高估释放量。
+                            result.WorkingSetBytes +=
+                                group.ProcessBytes.TryGetValue(process.Id, out bytes) ? bytes : 0;
                         }
                     }
                     catch (Exception ex)
@@ -2944,24 +3113,9 @@ namespace PcManagerLite
             out string output,
             out int exitCode)
         {
-            ProcessStartInfo startInfo = new ProcessStartInfo();
-            startInfo.FileName = fileName;
-            startInfo.Arguments = arguments;
-            startInfo.UseShellExecute = false;
-            startInfo.CreateNoWindow = true;
-            startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-            startInfo.RedirectStandardOutput = true;
-            startInfo.RedirectStandardError = true;
-            startInfo.StandardOutputEncoding = Encoding.Default;
-            startInfo.StandardErrorEncoding = Encoding.Default;
-            using (Process process = Process.Start(startInfo))
-            {
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
-                process.WaitForExit(6000);
-                output = stdout + (String.IsNullOrWhiteSpace(stderr) ? "" : "\r\n" + stderr);
-                exitCode = process.HasExited ? process.ExitCode : -1;
-            }
+            ProcessRunResult run = ProcessRunner.Run(fileName, arguments, 6000);
+            output = run.Combined;
+            exitCode = run.ExitCode;
         }
     }
 
@@ -3150,7 +3304,7 @@ namespace PcManagerLite
                         pair.Key + "=" +
                         Convert.ToBase64String(Encoding.UTF8.GetBytes(pair.Value)));
                 }
-                File.WriteAllLines(AppPaths.BackupFile, lines.ToArray(), Encoding.UTF8);
+                SafeFiles.AtomicWriteAllLines(AppPaths.BackupFile, lines.ToArray());
             }
             catch (Exception ex)
             {
@@ -3219,9 +3373,19 @@ namespace PcManagerLite
                 null);
         }
 
+        private static string _cachedExecutablePath;
+
         public static string ApplicationExecutablePath()
         {
-            return Process.GetCurrentProcess().MainModule.FileName;
+            // 自进程路径在运行期不会变化；缓存后避免扫描热路径上反复创建 Process 对象。
+            if (_cachedExecutablePath == null)
+            {
+                using (Process self = Process.GetCurrentProcess())
+                {
+                    _cachedExecutablePath = self.MainModule.FileName;
+                }
+            }
+            return _cachedExecutablePath;
         }
     }
 
@@ -3256,52 +3420,37 @@ namespace PcManagerLite
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
                 startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-                startInfo.RedirectStandardOutput = true;
-                startInfo.RedirectStandardError = true;
-                startInfo.StandardOutputEncoding = Encoding.Default;
-                startInfo.StandardErrorEncoding = Encoding.Default;
-                using (Process process = Process.Start(startInfo))
+                ProcessRunResult run = ProcessRunner.Run(powershell, startInfo.Arguments, 180000);
+                if (run.TimedOut)
                 {
-                    string output = process.StandardOutput.ReadToEnd();
-                    string error = process.StandardError.ReadToEnd();
-                    if (!process.WaitForExit(180000))
-                    {
-                        try
-                        {
-                            process.Kill();
-                        }
-                        catch
-                        {
-                        }
-                        result.Message = "创建还原点超时。请打开系统保护设置检查配置。";
-                        return result;
-                    }
-                    string combined = (output + "\r\n" + error).Trim();
-                    if (process.ExitCode == 0 && String.IsNullOrWhiteSpace(error))
-                    {
-                        result.Success = true;
-                        result.Message = "系统还原点已创建。";
-                        return result;
-                    }
-                    if (combined.IndexOf("1440", StringComparison.Ordinal) >= 0 ||
-                        combined.IndexOf("frequently", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        combined.IndexOf("频率", StringComparison.Ordinal) >= 0)
-                    {
-                        result.Skipped = true;
-                        result.Message = "Windows 24 小时内已创建过还原点，本次跳过。";
-                        return result;
-                    }
-                    if (combined.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        combined.IndexOf("禁用", StringComparison.Ordinal) >= 0)
-                    {
-                        result.Message = "系统保护未开启，无法创建还原点。";
-                        return result;
-                    }
-                    result.Message = String.IsNullOrWhiteSpace(combined)
-                        ? "创建还原点失败，系统未返回原因。"
-                        : combined;
+                    result.Message = "创建还原点超时。请打开系统保护设置检查配置。";
                     return result;
                 }
+                string combined = run.Combined.Trim();
+                if (run.ExitCode == 0 && run.Error.ToString().Trim().Length == 0)
+                {
+                    result.Success = true;
+                    result.Message = "系统还原点已创建。";
+                    return result;
+                }
+                if (combined.IndexOf("1440", StringComparison.Ordinal) >= 0 ||
+                    combined.IndexOf("frequently", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    combined.IndexOf("频率", StringComparison.Ordinal) >= 0)
+                {
+                    result.Skipped = true;
+                    result.Message = "Windows 24 小时内已创建过还原点，本次跳过。";
+                    return result;
+                }
+                if (combined.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    combined.IndexOf("禁用", StringComparison.Ordinal) >= 0)
+                {
+                    result.Message = "系统保护未开启，无法创建还原点。";
+                    return result;
+                }
+                result.Message = String.IsNullOrWhiteSpace(combined)
+                    ? "创建还原点失败，系统未返回原因。"
+                    : combined;
+                return result;
             }
             catch (Exception ex)
             {
@@ -3728,6 +3877,22 @@ namespace PcManagerLite
             }
         }
 
+        // 清理上次更新遗留的 exe.bak，避免安装目录随每次更新累积旧文件。
+        public static void CleanupUpdateArtifacts()
+        {
+            try
+            {
+                string backup = ShortcutManager.ApplicationExecutablePath() + ".bak";
+                if (File.Exists(backup))
+                {
+                    File.Delete(backup);
+                }
+            }
+            catch
+            {
+            }
+        }
+
         public static bool StartUpdaterAndExit(string downloadedPath)
         {
             try
@@ -3745,6 +3910,9 @@ namespace PcManagerLite
                     "try {{ Copy-Item -LiteralPath '{1}' -Destination '{2}' -Force }} " +
                     "catch {{ Add-Content -LiteralPath '{3}' -Value $_.Exception.ToString() }}; " +
                     "Start-Process -FilePath '{2}'; " +
+                    "Start-Sleep -Seconds 5; " +
+                    "if (Test-Path -LiteralPath '{4}') {{ " +
+                    "Remove-Item -LiteralPath '{4}' -Force -ErrorAction SilentlyContinue }}; " +
                     "if (Test-Path -LiteralPath '{1}') {{ Remove-Item -LiteralPath '{1}' -Force }}",
                     processId,
                     EscapePowerShell(downloadedPath),
@@ -3796,43 +3964,6 @@ namespace PcManagerLite
         private static string EscapePowerShell(string value)
         {
             return (value ?? String.Empty).Replace("'", "''");
-        }
-    }
-
-    internal static class AppLifecycleService
-    {
-        public static bool RelaunchAfterExit()
-        {
-            try
-            {
-                string executable = ShortcutManager.ApplicationExecutablePath();
-                int processId = Process.GetCurrentProcess().Id;
-                string script = String.Format(
-                    "while (Get-Process -Id {0} -ErrorAction SilentlyContinue) {{ " +
-                    "Start-Sleep -Milliseconds 250 }}; Start-Sleep -Milliseconds 300; " +
-                    "Start-Process -FilePath '{1}'",
-                    processId,
-                    executable.Replace("'", "''"));
-                string encoded = Convert.ToBase64String(
-                    Encoding.Unicode.GetBytes(script));
-                ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                    @"System32\WindowsPowerShell\v1.0\powershell.exe");
-                startInfo.Arguments =
-                    "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass " +
-                    "-EncodedCommand " + encoded;
-                startInfo.UseShellExecute = false;
-                startInfo.CreateNoWindow = true;
-                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-                Process.Start(startInfo);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Write("重启管家失败: " + ex);
-                return false;
-            }
         }
     }
 
@@ -4458,7 +4589,7 @@ namespace PcManagerLite
                 {
                     lines.Add(record.Serialize());
                 }
-                File.WriteAllLines(BackupFile, lines.ToArray(), Encoding.UTF8);
+                SafeFiles.AtomicWriteAllLines(BackupFile, lines.ToArray());
             }
             catch (Exception ex)
             {
@@ -4519,24 +4650,9 @@ namespace PcManagerLite
             out string output,
             out int exitCode)
         {
-            ProcessStartInfo startInfo = new ProcessStartInfo();
-            startInfo.FileName = fileName;
-            startInfo.Arguments = arguments;
-            startInfo.UseShellExecute = false;
-            startInfo.CreateNoWindow = true;
-            startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-            startInfo.RedirectStandardOutput = true;
-            startInfo.RedirectStandardError = true;
-            startInfo.StandardOutputEncoding = Encoding.Default;
-            startInfo.StandardErrorEncoding = Encoding.Default;
-            using (Process process = Process.Start(startInfo))
-            {
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
-                process.WaitForExit(6000);
-                output = stdout + (String.IsNullOrWhiteSpace(stderr) ? "" : "\r\n" + stderr);
-                exitCode = process.HasExited ? process.ExitCode : -1;
-            }
+            ProcessRunResult run = ProcessRunner.Run(fileName, arguments, 6000);
+            output = run.Combined;
+            exitCode = run.ExitCode;
         }
     }
 
@@ -4937,10 +5053,25 @@ namespace PcManagerLite
                     return fileName.Length > 0;
                 }
             }
-            int exe = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-            if (exe > 0)
+            // 只在 ".exe" 后是空白/引号/结尾时才视为可切分点，
+            // 避免把 C:\foo.exe.backup\unins000.exe 之类路径在目录名处错误截断。
+            int searchFrom = 0;
+            while (searchFrom < command.Length)
             {
+                int exe = command.IndexOf(".exe", searchFrom, StringComparison.OrdinalIgnoreCase);
+                if (exe <= 0)
+                {
+                    return false;
+                }
                 int cut = exe + 4;
+                bool boundary = cut >= command.Length ||
+                    Char.IsWhiteSpace(command[cut]) ||
+                    command[cut] == '"';
+                if (!boundary)
+                {
+                    searchFrom = cut;
+                    continue;
+                }
                 fileName = command.Substring(0, cut).Trim().Trim('"');
                 arguments = command.Substring(cut).Trim();
                 if (fileName.Equals("msiexec.exe", StringComparison.OrdinalIgnoreCase))
@@ -5289,19 +5420,26 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        snapshot.Manufacturer = Value(item, "Manufacturer");
-                        snapshot.Model = Value(item, "Model");
-                        string name = Value(item, "Name");
-                        if (!String.IsNullOrWhiteSpace(name))
+                        try
                         {
-                            snapshot.ComputerName = name;
+                            snapshot.Manufacturer = Value(item, "Manufacturer");
+                            snapshot.Model = Value(item, "Model");
+                            string name = Value(item, "Name");
+                            if (!String.IsNullOrWhiteSpace(name))
+                            {
+                                snapshot.ComputerName = name;
+                            }
+                            string user = Value(item, "UserName");
+                            if (!String.IsNullOrWhiteSpace(user))
+                            {
+                                snapshot.UserName = user;
+                            }
+                            break;
                         }
-                        string user = Value(item, "UserName");
-                        if (!String.IsNullOrWhiteSpace(user))
+                        finally
                         {
-                            snapshot.UserName = user;
+                            item.Dispose();
                         }
-                        break;
                     }
                 }
             }
@@ -5320,11 +5458,18 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        snapshot.CpuName = Value(item, "Name");
-                        snapshot.CpuCores = (int)Number(item, "NumberOfCores");
-                        snapshot.CpuThreads = (int)Number(item, "NumberOfLogicalProcessors");
-                        snapshot.CpuClockMhz = (int)Number(item, "MaxClockSpeed");
-                        break;
+                        try
+                        {
+                            snapshot.CpuName = Value(item, "Name");
+                            snapshot.CpuCores = (int)Number(item, "NumberOfCores");
+                            snapshot.CpuThreads = (int)Number(item, "NumberOfLogicalProcessors");
+                            snapshot.CpuClockMhz = (int)Number(item, "MaxClockSpeed");
+                            break;
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
                     }
                 }
             }
@@ -5342,15 +5487,22 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        string name = Value(item, "Name");
-                        if (String.IsNullOrWhiteSpace(name))
+                        try
                         {
-                            continue;
+                            string name = Value(item, "Name");
+                            if (String.IsNullOrWhiteSpace(name))
+                            {
+                                continue;
+                            }
+                            if (String.IsNullOrWhiteSpace(snapshot.GpuName))
+                            {
+                                snapshot.GpuName = name;
+                                snapshot.GpuMemoryBytes = Number(item, "AdapterRAM");
+                            }
                         }
-                        if (String.IsNullOrWhiteSpace(snapshot.GpuName))
+                        finally
                         {
-                            snapshot.GpuName = name;
-                            snapshot.GpuMemoryBytes = Number(item, "AdapterRAM");
+                            item.Dispose();
                         }
                     }
                 }
@@ -5370,13 +5522,20 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        MemoryModuleInfo module = new MemoryModuleInfo();
-                        module.CapacityBytes = Number(item, "Capacity");
-                        module.Speed = Value(item, "Speed");
-                        module.Manufacturer = Value(item, "Manufacturer");
-                        module.Slot = Value(item, "DeviceLocator");
-                        snapshot.MemoryModules.Add(module);
-                        snapshot.TotalMemoryBytes += module.CapacityBytes;
+                        try
+                        {
+                            MemoryModuleInfo module = new MemoryModuleInfo();
+                            module.CapacityBytes = Number(item, "Capacity");
+                            module.Speed = Value(item, "Speed");
+                            module.Manufacturer = Value(item, "Manufacturer");
+                            module.Slot = Value(item, "DeviceLocator");
+                            snapshot.MemoryModules.Add(module);
+                            snapshot.TotalMemoryBytes += module.CapacityBytes;
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
                     }
                 }
             }
@@ -5398,15 +5557,22 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        DiskDeviceInfo disk = new DiskDeviceInfo();
-                        disk.Model = Value(item, "Model");
-                        disk.SizeBytes = Number(item, "Size");
-                        disk.Interface = Value(item, "InterfaceType");
-                        disk.MediaType = Value(item, "MediaType");
-                        disk.Status = Value(item, "Status");
-                        if (!String.IsNullOrWhiteSpace(disk.Model) || disk.SizeBytes > 0)
+                        try
                         {
-                            snapshot.Disks.Add(disk);
+                            DiskDeviceInfo disk = new DiskDeviceInfo();
+                            disk.Model = Value(item, "Model");
+                            disk.SizeBytes = Number(item, "Size");
+                            disk.Interface = Value(item, "InterfaceType");
+                            disk.MediaType = Value(item, "MediaType");
+                            disk.Status = Value(item, "Status");
+                            if (!String.IsNullOrWhiteSpace(disk.Model) || disk.SizeBytes > 0)
+                            {
+                                snapshot.Disks.Add(disk);
+                            }
+                        }
+                        finally
+                        {
+                            item.Dispose();
                         }
                     }
                 }
@@ -5426,13 +5592,20 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        snapshot.OsCaption = Value(item, "Caption");
-                        snapshot.OsVersion = Value(item, "Version");
-                        snapshot.OsBuild = Value(item, "BuildNumber");
-                        snapshot.Architecture = Value(item, "OSArchitecture");
-                        snapshot.InstallDate = Date(item, "InstallDate");
-                        snapshot.LastBoot = Date(item, "LastBootUpTime");
-                        break;
+                        try
+                        {
+                            snapshot.OsCaption = Value(item, "Caption");
+                            snapshot.OsVersion = Value(item, "Version");
+                            snapshot.OsBuild = Value(item, "BuildNumber");
+                            snapshot.Architecture = Value(item, "OSArchitecture");
+                            snapshot.InstallDate = Date(item, "InstallDate");
+                            snapshot.LastBoot = Date(item, "LastBootUpTime");
+                            break;
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
                     }
                 }
             }
@@ -5565,38 +5738,8 @@ namespace PcManagerLite
 
         private static int Run(string arguments, int timeoutMs)
         {
-            try
-            {
-                ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = "schtasks.exe";
-                startInfo.Arguments = arguments;
-                startInfo.UseShellExecute = false;
-                startInfo.CreateNoWindow = true;
-                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
-                startInfo.RedirectStandardOutput = true;
-                startInfo.RedirectStandardError = true;
-                using (Process process = Process.Start(startInfo))
-                {
-                    process.StandardOutput.ReadToEnd();
-                    process.StandardError.ReadToEnd();
-                    if (!process.WaitForExit(timeoutMs))
-                    {
-                        try
-                        {
-                            process.Kill();
-                        }
-                        catch
-                        {
-                        }
-                        return -1;
-                    }
-                    return process.ExitCode;
-                }
-            }
-            catch
-            {
-                return -1;
-            }
+            ProcessRunResult run = ProcessRunner.Run("schtasks.exe", arguments, timeoutMs);
+            return run.TimedOut ? -1 : run.ExitCode;
         }
     }
 
@@ -5976,19 +6119,26 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        status.Available = true;
-                        status.AntivirusEnabled = Bool(item, "AntivirusEnabled");
-                        status.RealTimeProtectionEnabled =
-                            Bool(item, "RealTimeProtectionEnabled");
-                        status.AmServiceEnabled = Bool(item, "AMServiceEnabled");
-                        status.ProductName = Text(item, "AMProductVersion");
-                        status.SignatureVersion =
-                            Text(item, "AntivirusSignatureVersion");
-                        status.SignatureUpdated =
-                            Date(item, "AntivirusSignatureLastUpdated");
-                        status.LastQuickScan = Date(item, "QuickScanEndTime");
-                        status.LastFullScan = Date(item, "FullScanEndTime");
-                        break;
+                        try
+                        {
+                            status.Available = true;
+                            status.AntivirusEnabled = Bool(item, "AntivirusEnabled");
+                            status.RealTimeProtectionEnabled =
+                                Bool(item, "RealTimeProtectionEnabled");
+                            status.AmServiceEnabled = Bool(item, "AMServiceEnabled");
+                            status.ProductName = Text(item, "AMProductVersion");
+                            status.SignatureVersion =
+                                Text(item, "AntivirusSignatureVersion");
+                            status.SignatureUpdated =
+                                Date(item, "AntivirusSignatureLastUpdated");
+                            status.LastQuickScan = Date(item, "QuickScanEndTime");
+                            status.LastFullScan = Date(item, "FullScanEndTime");
+                            break;
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
                     }
                 }
             }
@@ -6012,9 +6162,16 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        long id = (long)Number(item, "ThreatID");
-                        names[id] = Text(item, "ThreatName");
-                        severities[id] = SeverityName(Number(item, "SeverityID"));
+                        try
+                        {
+                            long id = (long)Number(item, "ThreatID");
+                            names[id] = Text(item, "ThreatName");
+                            severities[id] = SeverityName(Number(item, "SeverityID"));
+                        }
+                        finally
+                        {
+                            item.Dispose();
+                        }
                     }
                 }
                 using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
@@ -6024,26 +6181,34 @@ namespace PcManagerLite
                 {
                     foreach (ManagementBaseObject item in searcher.Get())
                     {
-                        DefenderThreat threat = new DefenderThreat();
-                        threat.ThreatId = (long)Number(item, "ThreatID");
-                        threat.DetectedAt = Date(item, "InitialDetectionTime");
-                        threat.Status = StatusName(Number(item, "ThreatStatusID"));
-                        string name;
-                        if (names.TryGetValue(threat.ThreatId, out name))
+                        DefenderThreat threat;
+                        try
                         {
-                            threat.Name = name;
+                            threat = new DefenderThreat();
+                            threat.ThreatId = (long)Number(item, "ThreatID");
+                            threat.DetectedAt = Date(item, "InitialDetectionTime");
+                            threat.Status = StatusName(Number(item, "ThreatStatusID"));
+                            string name;
+                            if (names.TryGetValue(threat.ThreatId, out name))
+                            {
+                                threat.Name = name;
+                            }
+                            else
+                            {
+                                threat.Name = "Threat " + threat.ThreatId;
+                            }
+                            string severity;
+                            if (severities.TryGetValue(threat.ThreatId, out severity))
+                            {
+                                threat.Severity = severity;
+                            }
+                            threat.Resources = FirstResource(item);
+                            threats.Add(threat);
                         }
-                        else
+                        finally
                         {
-                            threat.Name = "Threat " + threat.ThreatId;
+                            item.Dispose();
                         }
-                        string severity;
-                        if (severities.TryGetValue(threat.ThreatId, out severity))
-                        {
-                            threat.Severity = severity;
-                        }
-                        threat.Resources = FirstResource(item);
-                        threats.Add(threat);
                     }
                 }
             }
@@ -6146,12 +6311,21 @@ namespace PcManagerLite
                         progress(e.Data.Trim());
                     }
                 };
+                // stderr 也必须异步读取：MpCmdRun 报错输出多时会把管道写满导致扫描假死。
+                process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                {
+                    if (!String.IsNullOrWhiteSpace(e.Data))
+                    {
+                        FileLogger.Write("Defender stderr: " + e.Data.Trim());
+                    }
+                };
                 process.Start();
                 lock (ScanSync)
                 {
                     _scanProcess = process;
                 }
                 process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
                 process.WaitForExit();
                 result.ExitCode = process.ExitCode;
                 result.Success = process.ExitCode == 0;
@@ -6187,34 +6361,16 @@ namespace PcManagerLite
                 message = "未找到 Windows Defender 组件。";
                 return false;
             }
-            try
-            {
-                ProcessStartInfo startInfo = new ProcessStartInfo();
-                startInfo.FileName = executable;
-                startInfo.Arguments = "-SignatureUpdate";
-                startInfo.UseShellExecute = false;
-                startInfo.CreateNoWindow = true;
-                startInfo.RedirectStandardOutput = true;
-                startInfo.RedirectStandardError = true;
-                startInfo.StandardOutputEncoding = Encoding.Default;
-                startInfo.StandardErrorEncoding = Encoding.Default;
-                using (Process process = Process.Start(startInfo))
-                {
-                    string output = process.StandardOutput.ReadToEnd();
-                    process.WaitForExit(180000);
-                    bool ok = process.HasExited && process.ExitCode == 0;
-                    message = ok
-                        ? "病毒库已更新。"
-                        : "病毒库更新未完成：" +
-                          (String.IsNullOrWhiteSpace(output) ? "未知原因" : output.Trim());
-                    return ok;
-                }
-            }
-            catch (Exception ex)
-            {
-                message = ex.Message;
-                return false;
-            }
+            ProcessRunResult run = ProcessRunner.Run(executable, "-SignatureUpdate", 180000);
+            bool ok = !run.TimedOut && run.ExitCode == 0;
+            string combined = run.Combined.Trim();
+            message = ok
+                ? "病毒库已更新。"
+                : "病毒库更新未完成：" +
+                  (run.TimedOut
+                      ? "命令超时"
+                      : String.IsNullOrWhiteSpace(combined) ? "未知原因" : combined);
+            return ok;
         }
 
         public static bool CancelScan()
